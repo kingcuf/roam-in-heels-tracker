@@ -1,0 +1,62 @@
+{
+  "expo": {
+    "name": "Roam in Heels",
+    "slug": "spira-pnl",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "backgroundColor": "#0F2A33",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.roaminheels.pnl"
+    },
+    "android": {
+      "package": "com.roaminheels.pnl",
+      "adaptiveIcon": {
+        "backgroundColor": "#0F2A33",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "softwareKeyboardLayoutMode": "resize"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-secure-store",
+      "@react-native-community/datetimepicker",
+      "expo-font",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/logo.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#0F2A33"
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": false,
+          "recordAudioAndroid": false,
+          "enableBackgroundPlayback": false
+        }
+      ],
+      "expo-asset"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "17fa3a7a-5ab5-48de-babe-0c78d8b4c770"
+      }
+    },
+    "owner": "roam-in-heels",
+    "runtimeVersion": {
+      "policy": "sdkVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/17fa3a7a-5ab5-48de-babe-0c78d8b4c770"
+    }
+  }
+}

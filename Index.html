@@ -1,0 +1,736 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0F2A43">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="PnL report">
+  <title>PnL report</title>
+  <link rel="icon" type="image/png" sizes="64x64" href="favicon.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Italiana&family=Jost:wght@300;400;500;600;700&family=Pinyon+Script&display=swap');
+    :root{
+      /* Roam in Heels — warm editorial palette */
+      --navy:#2E1F14; --blue:#B0683C; --blue2:#9C5E36; --line:#E6D9C7;
+      --bg:#FBF6EF; --card:#ffffff; --ink:#2E1F14; --muted:#A89684;
+      --green:#6E8B5C; --greenbg:#EBF1E4; --amber:#B5832F; --amberbg:#FBF0DA;
+      --red:#B5482E; --redbg:#F7E4DC; --sky:#5E7E88; --skybg:#E7EEF0;
+      --display:'Italiana','Cormorant Garamond',Didot,'Times New Roman',serif;
+      --body:'Jost','Avenir Next','Helvetica Neue',system-ui,sans-serif;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:var(--body);
+         background:var(--bg);color:var(--ink);font-size:14px;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+    h1,h2,h3{margin:0}
+    .hidden{display:none!important}
+
+    #login{min-height:100vh;display:flex;align-items:center;justify-content:center;
+           background:radial-gradient(1200px 700px at 50% -10%,#9c6440,var(--navy))}
+    .login-card{background:#fff;border-radius:20px;padding:38px 32px;width:320px;text-align:center;box-shadow:0 24px 60px rgba(104,73,52,.38)}
+    .login-card h1{font-family:var(--display);font-size:30px;font-weight:400;color:var(--navy);margin-bottom:2px;letter-spacing:.5px}
+    .login-card p{color:var(--muted);margin:0 0 18px;font-size:13px}
+    .login-card input{width:100%;padding:12px;border:1px solid var(--line);border-radius:12px;font-size:18px;text-align:center;letter-spacing:6px}
+    .login-card button{margin-top:16px;width:100%;padding:13px;border:0;border-radius:999px;background:var(--blue);color:#fff;font-size:15px;font-weight:600;cursor:pointer;letter-spacing:.3px}
+    .login-card button:hover{background:var(--navy)}
+    .err{color:var(--red);font-size:13px;margin-top:10px;min-height:16px}
+
+    header{background:var(--navy);color:#fff;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:5}
+    header .title{font-family:var(--display);font-size:23px;font-weight:400;letter-spacing:.4px}
+    header .sub{font-size:11px;color:#dcc0a6}
+    .brand{display:flex;align-items:center;gap:11px}
+    .logo{width:38px;height:38px;border-radius:50%;flex:none;box-shadow:0 0 0 1px rgba(255,255,255,.3)}
+    .logo-lg{width:66px;height:66px;border-radius:50%;display:block;margin:0 auto 12px;box-shadow:0 6px 18px rgba(104,73,52,.25)}
+    nav{background:#fff;border-bottom:1px solid var(--line);display:flex;gap:4px;padding:0 16px;position:sticky;top:54px;z-index:4;flex-wrap:wrap}
+    nav button{background:none;border:0;padding:14px 16px;font-size:14px;font-weight:600;color:var(--muted);cursor:pointer;border-bottom:3px solid transparent}
+    nav button.active{color:var(--blue);border-bottom-color:var(--blue2)}
+    main{max-width:1080px;margin:0 auto;padding:20px 16px 60px}
+
+    .toolbar{display:flex;align-items:center;gap:16px;margin-bottom:16px;flex-wrap:wrap}
+    .toolbar .tgroup{display:flex;align-items:center;gap:8px}
+    .toolbar label{font-size:12px;font-weight:600;color:var(--muted);white-space:nowrap}
+    .toolbar select,.toolbar input{padding:8px 10px;border:1px solid var(--line);border-radius:9px;font-size:14px;background:#fff}
+    .toolbar select{min-width:150px}
+
+    .kpi-h{font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);margin:2px 2px 8px}
+    .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px}
+    .kpi{border-radius:14px;padding:16px 18px;border:1px solid var(--line)}
+    .kpi .lbl{font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;opacity:.85}
+    .kpi .val{font-size:24px;font-weight:800;margin-top:6px}
+    .kpi.rev{background:var(--greenbg)} .kpi.rev .lbl,.kpi.rev .val{color:var(--green)}
+    .kpi.exp{background:var(--amberbg)} .kpi.exp .lbl,.kpi.exp .val{color:var(--amber)}
+    .kpi.pnl{background:var(--redbg)}   .kpi.pnl .lbl,.kpi.pnl .val{color:var(--red)}
+    .kpi.bkg{background:var(--skybg)}   .kpi.bkg .lbl,.kpi.bkg .val{color:var(--sky)}
+
+    .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
+    .panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px}
+    .panel h3{font-size:13px;text-transform:uppercase;letter-spacing:.4px;color:var(--blue);margin-bottom:12px;border-bottom:2px solid var(--line);padding-bottom:8px}
+    table{width:100%;border-collapse:collapse;font-size:13px}
+    th,td{padding:8px 10px;text-align:left;border-bottom:1px solid #f0f2f6}
+    th{font-size:11px;text-transform:uppercase;color:var(--muted);letter-spacing:.3px}
+    td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+    tr.total td{font-weight:700;background:#f7f9fc}
+    .pill{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600}
+    .pill.Stay{background:var(--greenbg);color:var(--green)}
+    .pill.Resold{background:var(--amberbg);color:var(--amber)}
+    .pill.Pass{background:var(--skybg);color:var(--sky)}
+    .pill.Active{background:var(--greenbg);color:var(--green)}
+    .pill.Inactive{background:#f1f1f1;color:#777}
+    canvas{max-height:240px}
+
+    .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+    .field{display:flex;flex-direction:column;gap:5px}
+    .field.full{grid-column:1 / -1}
+    label{font-size:12px;font-weight:600;color:#374151}
+    label .req{color:var(--red)}
+    input,select,textarea{padding:10px;border:1px solid var(--line);border-radius:9px;font-size:14px;font-family:inherit;background:#fff}
+    input:focus,select:focus,textarea:focus{outline:none;border-color:var(--blue2);box-shadow:0 0 0 3px rgba(46,117,182,.15)}
+    .hint{font-size:11px;color:var(--muted)}
+    .actions{display:flex;gap:10px;align-items:center;margin-top:18px}
+    .btn{padding:11px 22px;border:0;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer}
+    .btn.primary{background:var(--blue);color:#fff} .btn.primary:hover{background:var(--navy)}
+    .btn.primary:disabled{opacity:.6;cursor:default}
+    .btn.ghost{background:#eef2f7;color:#374151}
+    .btn.danger{background:#fff;color:var(--red);border:1px solid var(--red)} .btn.danger:hover{background:var(--redbg)}
+    .btn.mini{padding:5px 12px;font-size:12px;background:#eef2f7;color:var(--blue);border-radius:7px}
+    .pagehead{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+    .pagehead h2{font-size:18px;color:var(--navy)}
+    .refresh{background:#eef2f7;border:0;border-radius:8px;padding:8px 12px;cursor:pointer;font-weight:600;color:#374151}
+
+    #toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(120px);background:#111827;color:#fff;padding:13px 20px;border-radius:10px;font-size:14px;box-shadow:0 12px 30px rgba(0,0,0,.3);transition:transform .3s;z-index:50;max-width:90%}
+    #toast.show{transform:translateX(-50%) translateY(0)}
+    #toast.ok{background:#15803d} #toast.bad{background:#b91c1c}
+
+    .kpi.card-click{cursor:pointer;position:relative}
+    .kpi.card-click::after{content:'›';position:absolute;top:9px;right:13px;font-size:17px;opacity:.4;font-weight:700}
+    .kpi.card-click:active{transform:scale(.985)}
+    #ovl{position:fixed;inset:0;background:rgba(15,42,67,.45);opacity:0;pointer-events:none;transition:opacity .2s;z-index:40}
+    #ovl.show{opacity:1;pointer-events:auto}
+    #drawer{position:fixed;top:0;right:0;height:100%;width:400px;max-width:92vw;background:#fff;z-index:41;
+            transform:translateX(106%);transition:transform .26s ease;box-shadow:-10px 0 40px rgba(0,0,0,.22);display:flex;flex-direction:column}
+    #drawer.show{transform:translateX(0)}
+    .dwh{padding:16px 18px;border-bottom:1px solid var(--line);display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+    .dwh .t{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);font-weight:700}
+    .dwh .v{font-size:22px;font-weight:800;margin-top:3px;color:var(--navy)}
+    .dwx{background:#eef2f7;border:0;border-radius:8px;width:32px;height:32px;font-size:18px;cursor:pointer;color:#555;flex:none}
+    .dwbody{padding:14px 18px 28px;overflow:auto}
+    .dwbody h4{font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--blue);margin:16px 0 6px}
+    .dwbody h4:first-child{margin-top:0}
+    .chk{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #f0f2f6}
+    .chk .nm{display:flex;align-items:center;gap:9px;font-weight:600}
+    .dot{width:20px;height:20px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;flex:none}
+    .dot.ok{background:var(--greenbg);color:var(--green)} .dot.no{background:#fdecea;color:var(--red)}
+    .tag.no{color:var(--amber);font-weight:700;font-size:12px}
+    .sumline{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f0f2f6;font-size:14px}
+    .sumline.tot{font-weight:800;border-top:2px solid var(--line);border-bottom:0;margin-top:4px}
+    .logsearch{padding:9px 12px;border:1px solid var(--line);border-radius:9px;font-size:14px;min-width:200px}
+    .pagehead .logsearch{margin-left:auto}
+    .logwrap{overflow-x:auto}
+    table.logtbl{white-space:nowrap;font-size:12px;min-width:100%}
+    table.logtbl th{position:sticky;top:0;background:#fff;z-index:1}
+    table.logtbl tr.filtrow th{padding:4px 5px;background:#f7f9fc}
+    table.logtbl .colf{width:100%;min-width:78px;padding:5px 6px;font-size:12px;font-weight:400;border:1px solid var(--line);border-radius:6px}
+    table.logtbl tbody tr{cursor:pointer}
+    table.logtbl tbody tr:hover{background:#faf3e9}
+    .editmsg{background:var(--amberbg);color:var(--amber);border:1px solid #e9d2a3;border-radius:10px;padding:9px 13px;font-size:13px;font-weight:600;margin-bottom:4px}
+    table.mx th,table.mx td{padding:9px 8px}
+    table.mx th:first-child,table.mx td:first-child{padding-left:2px}
+    table.mx .z{color:#cdd4dd}
+    table.mx .tcol{font-weight:700;background:#f6f8fc}
+    table.mx tbody tr:not(.total):hover{background:#fafbfd}
+    @media(max-width:720px){
+      body{font-size:15px}
+      .kpis{grid-template-columns:1fr 1fr;gap:10px}
+      .kpi{padding:14px}
+      .kpi .val{font-size:21px} .kpi .lbl{font-size:10px}
+      .grid2{grid-template-columns:1fr}
+      .form-grid{grid-template-columns:1fr}
+      main{max-width:100%;padding:14px 12px calc(30px + env(safe-area-inset-bottom))}
+      header{padding:12px 15px;padding-top:calc(12px + env(safe-area-inset-top))}
+      header .title{font-size:15px}
+      nav{overflow-x:auto;flex-wrap:nowrap;-webkit-overflow-scrolling:touch}
+      nav button{white-space:nowrap;padding:13px 14px}
+      .panel{padding:13px}
+      table{font-size:12px} th,td{padding:7px 6px}
+      input,select,textarea{font-size:16px}     /* stops iOS zoom-on-focus */
+      .toolbar{flex-direction:column;align-items:stretch;gap:10px}
+      .toolbar .tgroup{gap:10px}
+      .toolbar .tgroup label{min-width:62px}
+      .toolbar .tgroup select,.toolbar .tgroup input{flex:1;min-width:0}
+      .btn{padding:13px 22px;font-size:15px}
+      .pagehead{flex-wrap:wrap;gap:10px}
+      .pagehead .logsearch{margin-left:0;width:100%}
+      .login-card{width:min(340px,90vw)}
+      /* right panel -> bottom sheet */
+      #drawer{top:auto;bottom:0;right:0;left:0;width:100%;max-width:100%;height:auto;max-height:88vh;
+              border-radius:18px 18px 0 0;transform:translateY(106%);box-shadow:0 -10px 40px rgba(0,0,0,.25);
+              padding-bottom:env(safe-area-inset-bottom)}
+      #drawer.show{transform:translateY(0)}
+      #drawer::before{content:'';position:absolute;top:7px;left:50%;transform:translateX(-50%);width:40px;height:4px;border-radius:3px;background:#d4dae3}
+      .dwh{padding-top:20px}
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ░░ LOGIN ░░ -->
+  <div id="login">
+    <div class="login-card">
+      <img class="logo-lg" src="logo.png" alt="Roam in Heels">
+      <h1>PnL report</h1>
+      <p>Enter your PIN to continue</p>
+      <input id="pin" type="password" inputmode="numeric" placeholder="••••" autofocus onkeydown="if(event.key==='Enter')doLogin()">
+      <button onclick="doLogin()" id="loginBtn">Unlock</button>
+      <div class="err" id="loginErr"></div>
+    </div>
+  </div>
+
+  <!-- ░░ APP ░░ -->
+  <div id="app" class="hidden">
+    <header>
+      <div class="brand"><img class="logo" src="logo.png" alt="Roam in Heels"><div><div class="title">PnL report</div><div class="sub" id="genAt"></div></div></div>
+      <button class="refresh" onclick="loadDashboard()">↻ Refresh</button>
+    </header>
+    <nav>
+      <button class="active" data-view="dash" onclick="showView('dash',this)">Dashboard</button>
+      <button data-view="book" onclick="resetBooking();showView('book',this)">+ Add Booking</button>
+      <button data-view="exp"  onclick="resetExpense();showView('exp',this)">+ Add Expense</button>
+      <button data-view="blog" onclick="openLogs('blog',this)">Booking Logs</button>
+      <button data-view="elog" onclick="openLogs('elog',this)">Expense Logs</button>
+      <button data-view="prop" onclick="showView('prop',this)">Properties</button>
+    </nav>
+    <main>
+
+      <!-- DASHBOARD -->
+      <section id="view-dash">
+        <div class="toolbar">
+          <div class="tgroup"><label for="propFilter">Property</label>
+            <select id="propFilter" onchange="loadDashboard()"></select></div>
+          <div class="tgroup"><label for="rangeSel">Range</label>
+            <select id="rangeSel" onchange="onRangeChange()">
+              <option value="all">All time</option>
+              <option value="7">Last 7 days</option>
+              <option value="30">Last 30 days</option>
+              <option value="custom">Custom…</option>
+            </select></div>
+          <div class="tgroup hidden" id="customRange">
+            <input type="date" id="rFrom" onchange="loadDashboard()">
+            <input type="date" id="rTo" onchange="loadDashboard()">
+          </div>
+        </div>
+        <div class="kpi-h" id="ovlLabel">Overall · all time</div>
+        <div class="kpis">
+          <div class="kpi rev card-click" onclick="openDrill('revenue')"><div class="lbl">Total Revenue</div><div class="val" id="kRev">—</div></div>
+          <div class="kpi exp card-click" onclick="openDrill('expense')"><div class="lbl">Total Expense</div><div class="val" id="kExp">—</div></div>
+          <div class="kpi pnl card-click" onclick="openDrill('pnl')"><div class="lbl">Net P&amp;L</div><div class="val" id="kPnl">—</div></div>
+          <div class="kpi bkg card-click" onclick="openDrill('bookings')"><div class="lbl">Bookings</div><div class="val" id="kBk">—</div></div>
+        </div>
+        <div class="kpi-h" id="monthLabel">This Month</div>
+        <div class="kpis">
+          <div class="kpi rev card-click" onclick="openDrill('mrevenue')"><div class="lbl">Revenue</div><div class="val" id="mRev">—</div></div>
+          <div class="kpi exp card-click" onclick="openDrill('recurring')"><div class="lbl">Expense</div><div class="val" id="mExp">—</div></div>
+          <div class="kpi pnl card-click" onclick="openDrill('mpnl')"><div class="lbl">Net P&amp;L</div><div class="val" id="mPnl">—</div></div>
+          <div class="kpi bkg card-click" onclick="openDrill('mbookings')"><div class="lbl">Bookings</div><div class="val" id="mBk">—</div></div>
+        </div>
+        <div class="panel" style="margin-bottom:16px"><h3>Daily Earnings</h3><canvas id="chDaily"></canvas></div>
+        <div class="grid2">
+          <div class="panel"><h3>Revenue by Channel</h3>
+            <table id="tblChannel"><thead><tr><th>Channel</th><th class="num">Bookings</th><th class="num">Net</th></tr></thead><tbody></tbody></table></div>
+          <div class="panel"><h3>Income by Booking Type</h3>
+            <table id="tblType"><thead><tr><th>Type</th><th class="num">Bookings</th><th class="num">Net</th></tr></thead><tbody></tbody></table></div>
+        </div>
+        <div class="grid2">
+          <div class="panel"><h3>Expenses</h3><table id="tblExp"><tbody></tbody></table></div>
+          <div class="panel"><h3>Monthly P&amp;L (recurring + operating)</h3>
+            <table id="tblMonthly"><thead><tr><th>Month</th><th class="num">Bk</th><th class="num">Revenue</th><th class="num">Expense</th><th class="num">Net P&amp;L</th></tr></thead><tbody></tbody></table></div>
+        </div>
+        <div class="panel"><h3>Recent Bookings</h3>
+          <table id="tblRecent"><thead><tr><th>ID</th><th>Date</th><th>Guest</th><th>Type</th><th class="num">Net</th></tr></thead><tbody></tbody></table></div>
+      </section>
+
+      <!-- ADD BOOKING -->
+      <section id="view-book" class="hidden">
+        <div class="pagehead"><h2>Add Booking</h2><button class="btn ghost hidden" id="b_back" onclick="backToLogs('booking')">← Back to logs</button></div>
+        <div class="panel">
+          <div class="form-grid">
+            <div class="field"><label>Property <span class="req">*</span></label><select id="b_prop"></select></div>
+            <div class="field"><label>Booking Date <span class="req">*</span></label><input type="date" id="b_date"></div>
+            <div class="field"><label>Lead Guest</label><input id="b_guest" placeholder="Guest name"></div>
+            <div class="field"><label>Lead Birth Yr</label><input type="number" id="b_birth" placeholder="e.g. 1998"></div>
+            <div class="field"><label>Booking Type <span class="req">*</span></label>
+              <select id="b_type" onchange="syncChannel()"><option>Stay</option><option>Resold</option><option>Pass</option></select></div>
+            <div class="field"><label>Channel</label>
+              <select id="b_channel"><option>Airbnb</option><option>Booking.com</option><option>MMT</option><option>Agoda</option><option>Offline</option><option>Direct/Referral</option><option>Pass</option></select></div>
+            <div class="field full"><label>Referrer / Source</label><input id="b_referrer" placeholder="e.g. GVL Spira · Tushar (resold) · Airbnb - Harsh"></div>
+            <div class="field"><label>List Price (₹)</label><input type="number" id="b_list" step="0.01"></div>
+            <div class="field"><label>Discount (₹)</label><input type="number" id="b_disc" step="0.01"></div>
+            <div class="field"><label>Guest Paid (₹)</label><input type="number" id="b_gp" step="0.01" oninput="autoComm()"></div>
+            <div class="field"><label>Net Earned (₹) <span class="req">*</span></label><input type="number" id="b_net" step="0.01" oninput="autoComm()"><span class="hint">What you actually keep — drives revenue.</span></div>
+            <div class="field"><label>Commission (₹)</label><input type="number" id="b_comm" step="0.01"><span class="hint">Auto = Guest Paid − Net (editable).</span></div>
+            <div class="field"><label>Guests</label><input type="number" id="b_guests" step="1"></div>
+            <div class="field"><label>Phone</label><input id="b_phone"></div>
+            <div class="field"><label>Co-Guest</label><input id="b_coguest"></div>
+            <div class="field"><label>Co-Guest Birth Yr</label><input type="number" id="b_cobirth" placeholder="e.g. 2000"></div>
+            <div class="field full"><label>Notes</label><input id="b_notes"></div>
+          </div>
+          <div class="editmsg hidden" id="b_editmsg"></div>
+          <div class="actions"><button class="btn primary" id="b_submit" onclick="submitBooking()">Add Booking</button>
+            <button class="btn ghost" onclick="resetBooking()">Clear</button><button class="btn danger hidden" id="b_delete" onclick="deleteEntry('booking')">Delete</button></div>
+        </div>
+      </section>
+
+      <!-- ADD EXPENSE -->
+      <section id="view-exp" class="hidden">
+        <div class="pagehead"><h2>Add Expense</h2><button class="btn ghost hidden" id="e_back" onclick="backToLogs('expense')">← Back to logs</button></div>
+        <div class="panel">
+          <div class="form-grid">
+            <div class="field"><label>Property <span class="req">*</span></label><select id="e_prop"></select></div>
+            <div class="field"><label>Expense Month <span class="req">*</span></label><input type="month" id="e_month"><span class="hint">Month this cost belongs to (accrual).</span></div>
+            <div class="field"><label>Transaction Date</label><input type="date" id="e_date"><span class="hint">When it's actually paid (optional).</span></div>
+            <div class="field"><label>Category</label>
+              <select id="e_cat"><option>Rent</option><option>Caretaker</option><option>Police charge</option><option>Laundry</option><option>Wifi</option><option>Electricity bill</option><option>Re-stock</option><option>Kitchen</option><option>Cleaning</option><option>Decor</option><option>Linen</option><option>Utilities</option><option>Subscription</option><option>Transportation</option><option>Brokerage</option><option>Compliance</option><option>Setup</option><option>Booking Costs</option><option>Deposit</option><option>Other</option></select></div>
+            <div class="field"><label>Item / Description <span class="req">*</span></label><input id="e_item" placeholder="e.g. Monthly rent"></div>
+            <div class="field"><label>Amount (₹) <span class="req">*</span></label><input type="number" id="e_amount" step="0.01"></div>
+            <div class="field"><label>Type <span class="req">*</span></label>
+              <select id="e_type" onchange="syncRefundable()"><option>One-time</option><option>Recurring</option><option>Operating</option><option>Deposit</option></select></div>
+            <div class="field"><label>Refundable</label><select id="e_ref"><option>No</option><option>Yes</option></select><span class="hint">Refundable = excluded from expense (memo).</span></div>
+            <div class="field"><label>Quantity</label><input type="number" id="e_qty" step="1"></div>
+            <div class="field"><label>Vendor</label><input id="e_vendor"></div>
+            <div class="field"><label>Status</label><select id="e_status"><option>Bought</option><option>Ordered</option><option>Pending</option></select></div>
+            <div class="field full"><label>Notes</label><input id="e_notes"></div>
+          </div>
+          <div class="editmsg hidden" id="e_editmsg"></div>
+          <div class="actions"><button class="btn primary" id="e_submit" onclick="submitExpense()">Add Expense</button>
+            <button class="btn ghost" onclick="resetExpense()">Clear</button><button class="btn danger hidden" id="e_delete" onclick="deleteEntry('expense')">Delete</button></div>
+        </div>
+      </section>
+
+      <!-- PROPERTIES (config) -->
+      <section id="view-prop" class="hidden">
+        <div class="pagehead"><h2>Properties</h2></div>
+        <div class="panel" style="margin-bottom:16px">
+          <h3>Your properties</h3>
+          <table id="tblProps"><thead><tr><th>Name</th><th>ID</th><th>Location</th><th>Type</th><th>Status</th><th class="num">Monthly Rent</th><th>Onboarded</th><th></th></tr></thead><tbody></tbody></table>
+        </div>
+        <div class="panel">
+          <h3 id="propFormTitle">Add a property</h3>
+          <div class="form-grid">
+            <div class="field"><label>Property Name <span class="req">*</span></label><input id="p_name" placeholder="e.g. Riverside 12B"></div>
+            <div class="field"><label>Property ID</label><input id="p_id" placeholder="auto from name if blank"><span class="hint">Used as the unique key.</span></div>
+            <div class="field"><label>Location</label><input id="p_location"></div>
+            <div class="field"><label>Type</label><input id="p_type" placeholder="e.g. 1BHK"></div>
+            <div class="field"><label>Status</label><select id="p_status"><option>Active</option><option>Inactive</option></select></div>
+            <div class="field"><label>Onboarded</label><input type="date" id="p_onboarded"></div>
+            <div class="field"><label>Monthly Rent (₹)</label><input type="number" id="p_rent" step="0.01"></div>
+            <div class="field full"><label>Notes</label><input id="p_notes"></div>
+          </div>
+          <div class="actions">
+            <button class="btn primary" id="p_submit" onclick="submitProperty()">Add Property</button>
+            <button class="btn ghost" onclick="resetPropertyForm()">Cancel</button>
+          </div>
+          <input type="hidden" id="p_origId">
+        </div>
+      </section>
+
+      <!-- BOOKING LOGS -->
+      <section id="view-blog" class="hidden">
+        <div class="pagehead"><h2>Booking Logs</h2><input class="logsearch" id="blogSearch" placeholder="Search all columns…" oninput="filterLog('blog')"></div>
+        <div class="panel logwrap"><div id="blogTable"><div class="hint">Loading…</div></div></div>
+      </section>
+
+      <!-- EXPENSE LOGS -->
+      <section id="view-elog" class="hidden">
+        <div class="pagehead"><h2>Expense Logs</h2><input class="logsearch" id="elogSearch" placeholder="Search all columns…" oninput="filterLog('elog')"></div>
+        <div class="panel logwrap"><div id="elogTable"><div class="hint">Loading…</div></div></div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- drill-down: right panel (desktop) / bottom sheet (mobile) -->
+  <div id="ovl" onclick="closeDrill()"></div>
+  <div id="drawer">
+    <div class="dwh"><div><div class="t" id="dwTitle">Detail</div><div class="v" id="dwVal"></div></div>
+      <button class="dwx" onclick="closeDrill()">×</button></div>
+    <div class="dwbody" id="dwBody"></div>
+  </div>
+
+  <div id="toast"></div>
+
+<script>
+  var PIN = '';
+  var PROPS = [];
+  var LAST = null;
+  var LOGS = null, EDITB = null, EDITE = null;
+  var charts = {};
+  var inr = function(n){ return '₹' + Math.round(n).toLocaleString('en-IN'); };
+  function val(id){ return document.getElementById(id).value; }
+
+  /* ── login ── */
+  function doLogin(){
+    var pin = document.getElementById('pin').value, btn = document.getElementById('loginBtn');
+    document.getElementById('loginErr').textContent=''; btn.disabled=true; btn.textContent='Checking…';
+    google.script.run.withSuccessHandler(function(){
+        PIN=pin;
+        document.getElementById('login').classList.add('hidden');
+        document.getElementById('app').classList.remove('hidden');
+        prefillDates(); loadDashboard();
+      }).withFailureHandler(function(e){
+        btn.disabled=false; btn.textContent='Unlock';
+        var m=(e&&e.message)||'';
+        if(/pin/i.test(m)){ document.getElementById('loginErr').textContent='Wrong PIN, try again.'; document.getElementById('pin').value=''; }
+        else { document.getElementById('loginErr').textContent='Can\'t reach the API. In Apps Script set the deployment\'s "Who has access" to Anyone.'; }
+      }).login(pin);
+  }
+  function prefillDates(){
+    var iso=new Date().toISOString().slice(0,10);
+    document.getElementById('b_date').value=iso;
+    document.getElementById('e_date').value=iso;
+    document.getElementById('e_month').value=iso.slice(0,7);
+  }
+
+  /* ── nav ── */
+  function showView(v, el){
+    ['dash','book','exp','prop','blog','elog'].forEach(function(x){ document.getElementById('view-'+x).classList.toggle('hidden', x!==v); });
+    document.querySelectorAll('nav button').forEach(function(b){ b.classList.remove('active'); });
+    el.classList.add('active');
+  }
+
+  /* ── dashboard ── */
+  function rangeDates(){
+    var sel=document.getElementById('rangeSel').value, iso=function(d){return d.toISOString().slice(0,10);};
+    if(sel==='7'){ var t=new Date(), f=new Date(); f.setDate(f.getDate()-6); return {from:iso(f),to:iso(t)}; }
+    if(sel==='30'){ var t2=new Date(), f2=new Date(); f2.setDate(f2.getDate()-29); return {from:iso(f2),to:iso(t2)}; }
+    if(sel==='custom'){ return {from:document.getElementById('rFrom').value||'', to:document.getElementById('rTo').value||''}; }
+    return {from:'',to:''};
+  }
+  function rangeText(){
+    var sel=document.getElementById('rangeSel').value;
+    if(sel==='7') return 'Last 7 days'; if(sel==='30') return 'Last 30 days';
+    if(sel==='custom'){ var f=document.getElementById('rFrom').value, t=document.getElementById('rTo').value; return (f||t)?('Custom · '+(f||'…')+' → '+(t||'…')):'Custom range'; }
+    return 'Overall · all time';
+  }
+  function onRangeChange(){
+    var c=document.getElementById('rangeSel').value==='custom';
+    document.getElementById('customRange').classList.toggle('hidden', !c);
+    if(!c) loadDashboard();
+  }
+  function loadDashboard(){
+    var f = document.getElementById('propFilter').value || 'All', r = rangeDates();
+    google.script.run.withSuccessHandler(renderDashboard)
+      .withFailureHandler(function(e){ toast(e.message||'Failed to load', false); })
+      .getDashboard(PIN, f, r.from, r.to);
+  }
+
+  function refreshSelectors(currentFilter){
+    // dashboard filter: All + property names
+    var pf=document.getElementById('propFilter');
+    pf.innerHTML = '<option>All</option>' + PROPS.map(function(p){return '<option>'+esc(p.name)+'</option>';}).join('');
+    pf.value = currentFilter || 'All';
+    // form property selects (names only)
+    ['b_prop','e_prop'].forEach(function(id){
+      var sel=document.getElementById(id), prev=sel.value;
+      sel.innerHTML = PROPS.map(function(p){return '<option>'+esc(p.name)+'</option>';}).join('');
+      var want = (currentFilter && currentFilter!=='All') ? currentFilter : prev;
+      if (want && PROPS.some(function(p){return p.name===want;})) sel.value=want;
+    });
+  }
+
+  function renderDashboard(d){
+    LAST = d;
+    PROPS = d.properties || PROPS;
+    refreshSelectors(d.filter);
+    renderConfig();
+    document.getElementById('ovlLabel').textContent = rangeText();
+    var scope = (d.filter && d.filter!=='All') ? d.filter : 'All properties';
+    document.getElementById('genAt').textContent = scope + ' · updated ' + d.generatedAt;
+    document.getElementById('kRev').textContent=inr(d.kpis.totalRev);
+    document.getElementById('kExp').textContent=inr(d.kpis.totalExp);
+    document.getElementById('kPnl').textContent=inr(d.kpis.netPnL);
+    document.getElementById('kBk').textContent=d.kpis.bookings;
+    var mm = d.kpisMonth || {totalRev:0,totalExp:0,netPnL:0,bookings:0};
+    document.getElementById('mRev').textContent=inr(mm.totalRev);
+    document.getElementById('mExp').textContent=inr(mm.totalExp);
+    document.getElementById('mPnl').textContent=inr(mm.netPnL);
+    document.getElementById('mBk').textContent=mm.bookings;
+    document.getElementById('monthLabel').textContent=(d.currentMonth||'This Month')+' (current month)';
+
+    var ch=d.byChannel, keys=Object.keys(ch).sort(function(a,b){return ch[b].net-ch[a].net;}), tot={c:0,net:0};
+    var rows=keys.map(function(k){ tot.c+=ch[k].c; tot.net+=ch[k].net;
+      return '<tr><td>'+esc(k)+'</td><td class="num">'+ch[k].c+'</td><td class="num">'+inr(ch[k].net)+'</td></tr>'; });
+    rows.push('<tr class="total"><td>Total</td><td class="num">'+tot.c+'</td><td class="num">'+inr(tot.net)+'</td></tr>');
+    document.querySelector('#tblChannel tbody').innerHTML = rows.join('') || '<tr><td colspan="3" style="color:#999">No bookings</td></tr>';
+
+    var bt=d.byType||{Stay:{c:0,net:0},Resold:{c:0,net:0},Pass:{c:0,net:0}};
+    var btC=bt.Stay.c+bt.Resold.c+bt.Pass.c, btN=bt.Stay.net+bt.Resold.net+bt.Pass.net;
+    document.querySelector('#tblType tbody').innerHTML =
+      ['Stay','Resold','Pass'].map(function(t){return '<tr><td>'+t+'</td><td class="num">'+bt[t].c+'</td><td class="num">'+inr(bt[t].net)+'</td></tr>';}).join('')+
+      '<tr class="total"><td>Total</td><td class="num">'+btC+'</td><td class="num">'+inr(btN)+'</td></tr>';
+
+    var e=d.expenses;
+    document.querySelector('#tblExp tbody').innerHTML =
+      row2('One-time',inr(e.oneTime))+row2('Recurring',inr(e.recurring))+row2('Operating',inr(e.operating))+
+      '<tr class="total"><td>Total Expense</td><td class="num">'+inr(e.total)+'</td></tr>'+
+      row2('Refundable Deposits (memo)',inr(e.deposits));
+
+    var pnl = d.monthlyPnl || [], tR=0, tRec=0, tBk=0;
+    var pRows = pnl.map(function(m){ tR+=m.revenue; tRec+=m.recurring; tBk+=m.bookings;
+      return '<tr><td>'+m.month+'</td><td class="num">'+m.bookings+'</td><td class="num">'+inr(m.revenue)+
+             '</td><td class="num">'+inr(m.recurring)+'</td><td class="num" style="color:'+(m.netPnl<0?'#B5482E':'#6E8B5C')+'">'+inr(m.netPnl)+'</td></tr>';
+    });
+    if(pnl.length) pRows.push('<tr class="total"><td>Total</td><td class="num">'+tBk+'</td><td class="num">'+inr(tR)+'</td><td class="num">'+inr(tRec)+'</td><td class="num">'+inr(tR-tRec)+'</td></tr>');
+    document.querySelector('#tblMonthly tbody').innerHTML = pRows.join('') || '<tr><td colspan="5" style="color:#999">No data</td></tr>';
+
+    document.querySelector('#tblRecent tbody').innerHTML = d.recent.map(function(r){
+      return '<tr><td>'+r.id+'</td><td>'+r.date+'</td><td>'+esc(r.guest||'')+'</td><td><span class="pill '+r.type+'">'+r.type+'</span></td><td class="num">'+inr(r.net)+'</td></tr>';
+    }).join('') || '<tr><td colspan="5" style="color:#999">No bookings</td></tr>';
+
+    drawCharts(d);
+  }
+  function row2(a,b){ return '<tr><td>'+a+'</td><td class="num">'+b+'</td></tr>'; }
+
+  function drawCharts(d){
+    if(charts.daily) charts.daily.destroy();
+    charts.daily=new Chart(document.getElementById('chDaily'),{type:'bar',
+      data:{labels:d.daily.map(function(x){return x.date;}),datasets:[
+        {label:'Stay',data:d.daily.map(function(x){return x.stay;}),backgroundColor:'#B0683C'},
+        {label:'Commission',data:d.daily.map(function(x){return x.commission;}),backgroundColor:'#C9A06E'}]},
+      options:{responsive:true,scales:{x:{stacked:true,ticks:{font:{size:10}}},y:{stacked:true,ticks:{callback:function(v){return '₹'+(v/1000)+'k';}}}},plugins:{legend:{labels:{boxWidth:12,font:{size:11}}}}}});
+  }
+
+  /* ── add booking ── */
+  function syncChannel(){ if(val('b_type')==='Pass') document.getElementById('b_channel').value='Pass'; }
+  function autoComm(){ var gp=parseFloat(val('b_gp')),net=parseFloat(val('b_net')); if(!isNaN(gp)&&!isNaN(net)) document.getElementById('b_comm').value=(gp-net).toFixed(0); }
+  function submitBooking(){
+    var d={property:val('b_prop'),date:val('b_date'),guest:val('b_guest'),leadBirthYr:val('b_birth'),type:val('b_type'),
+      channel:val('b_channel'),referrer:val('b_referrer'),listPrice:val('b_list'),discount:val('b_disc'),
+      guestPaid:val('b_gp'),net:val('b_net'),commission:val('b_comm'),guests:val('b_guests'),phone:val('b_phone'),
+      coGuest:val('b_coguest'),coGuestBirthYr:val('b_cobirth'),notes:val('b_notes')};
+    if(!d.property){ toast('Select a property', false); return; }
+    if(!d.date){ toast('Booking date is required', false); return; }
+    if(d.net===''){ toast('Net Earned is required', false); return; }
+    var ed=EDITB, btn=document.getElementById('b_submit'), lbl=ed?'Save changes':'Add Booking';
+    btn.disabled=true; btn.textContent='Saving…';
+    var ok=function(res){ btn.disabled=false; btn.textContent=lbl; toast(res.message,true); resetBooking(); if(ed){ afterEdit(ed.from); } else { loadDashboard(); } };
+    var bad=function(e){ btn.disabled=false; btn.textContent=lbl; toast(e.message,false); };
+    if(ed){ d.bookingId=ed.bookingId; google.script.run.withSuccessHandler(ok).withFailureHandler(bad).updateBooking(PIN, ed.row, d); }
+    else  { google.script.run.withSuccessHandler(ok).withFailureHandler(bad).addBooking(PIN, d); }
+  }
+  function resetBooking(){
+    ['b_guest','b_birth','b_referrer','b_list','b_disc','b_gp','b_net','b_comm','b_guests','b_phone','b_coguest','b_cobirth','b_notes'].forEach(function(i){document.getElementById(i).value='';});
+    EDITB=null; document.getElementById('b_submit').textContent='Add Booking'; document.getElementById('b_editmsg').classList.add('hidden'); document.getElementById('b_delete').classList.add('hidden'); document.getElementById('b_back').classList.add('hidden');
+  }
+
+  /* ── add expense ── */
+  function syncRefundable(){ document.getElementById('e_ref').value=(val('e_type')==='Deposit')?'Yes':'No'; }
+  function submitExpense(){
+    var d={property:val('e_prop'),expenseMonth:val('e_month'),date:val('e_date'),category:val('e_cat'),item:val('e_item'),
+      amount:val('e_amount'),type:val('e_type'),refundable:val('e_ref'),quantity:val('e_qty'),vendor:val('e_vendor'),status:val('e_status'),notes:val('e_notes')};
+    if(!d.property){ toast('Select a property', false); return; }
+    if(!d.expenseMonth){ toast('Expense month is required', false); return; }
+    if(!d.item){ toast('Item / description is required', false); return; }
+    if(d.amount===''){ toast('Amount is required', false); return; }
+    var ed=EDITE, btn=document.getElementById('e_submit'), lbl=ed?'Save changes':'Add Expense';
+    btn.disabled=true; btn.textContent='Saving…';
+    var ok=function(res){ btn.disabled=false; btn.textContent=lbl; toast(res.message,true); resetExpense(); if(ed){ afterEdit(ed.from); } else { loadDashboard(); } };
+    var bad=function(e){ btn.disabled=false; btn.textContent=lbl; toast(e.message,false); };
+    if(ed){ google.script.run.withSuccessHandler(ok).withFailureHandler(bad).updateExpense(PIN, ed.row, d); }
+    else  { google.script.run.withSuccessHandler(ok).withFailureHandler(bad).addExpense(PIN, d); }
+  }
+  function resetExpense(){
+    ['e_item','e_amount','e_qty','e_vendor','e_notes'].forEach(function(i){document.getElementById(i).value='';});
+    EDITE=null; document.getElementById('e_submit').textContent='Add Expense'; document.getElementById('e_editmsg').classList.add('hidden'); document.getElementById('e_delete').classList.add('hidden'); document.getElementById('e_back').classList.add('hidden');
+  }
+
+  /* ── properties config ── */
+  function renderConfig(){
+    document.querySelector('#tblProps tbody').innerHTML = PROPS.map(function(p){
+      return '<tr><td>'+esc(p.name)+'</td><td>'+esc(p.id)+'</td><td>'+esc(p.location||'')+'</td><td>'+esc(p.type||'')+
+        '</td><td><span class="pill '+(p.status==='Inactive'?'Inactive':'Active')+'">'+esc(p.status||'Active')+'</span></td>'+
+        '<td class="num">'+(p.rent?inr(p.rent):'—')+'</td><td>'+esc(p.onboarded||'')+'</td>'+
+        '<td><button class="btn mini" onclick="editProperty(\''+jsq(p.id)+'\')">Edit</button></td></tr>';
+    }).join('') || '<tr><td colspan="8" style="color:#999">No properties yet — add one below.</td></tr>';
+  }
+  function editProperty(id){
+    var p=PROPS.filter(function(x){return String(x.id)===String(id);})[0]; if(!p) return;
+    document.getElementById('propFormTitle').textContent='Edit property';
+    document.getElementById('p_origId').value=p.id;
+    document.getElementById('p_name').value=p.name||'';
+    document.getElementById('p_id').value=p.id||'';
+    document.getElementById('p_location').value=p.location||'';
+    document.getElementById('p_type').value=p.type||'';
+    document.getElementById('p_status').value=p.status||'Active';
+    document.getElementById('p_onboarded').value=p.onboarded||'';
+    document.getElementById('p_rent').value=p.rent||'';
+    document.getElementById('p_notes').value=p.notes||'';
+    document.getElementById('p_submit').textContent='Save Changes';
+    showView('prop', document.querySelector('nav button[data-view="prop"]'));
+    window.scrollTo(0,document.body.scrollHeight);
+  }
+  function resetPropertyForm(){
+    ['p_name','p_id','p_location','p_type','p_onboarded','p_rent','p_notes','p_origId'].forEach(function(i){document.getElementById(i).value='';});
+    document.getElementById('p_status').value='Active';
+    document.getElementById('propFormTitle').textContent='Add a property';
+    document.getElementById('p_submit').textContent='Add Property';
+  }
+  function submitProperty(){
+    var d={name:val('p_name'),id:val('p_id'),location:val('p_location'),type:val('p_type'),
+      status:val('p_status'),onboarded:val('p_onboarded'),rent:val('p_rent'),notes:val('p_notes')};
+    if(!d.name){ toast('Property name is required', false); return; }
+    var origId=val('p_origId');
+    var btn=document.getElementById('p_submit'); var orig=btn.textContent; btn.disabled=true; btn.textContent='Saving…';
+    var ok=function(res){ btn.disabled=false; btn.textContent=orig; PROPS=res.properties||PROPS;
+      refreshSelectors(document.getElementById('propFilter').value); renderConfig(); resetPropertyForm(); toast(res.message,true); };
+    var bad=function(e){ btn.disabled=false; btn.textContent=orig; toast(e.message,false); };
+    if(origId){ d.origId=origId; google.script.run.withSuccessHandler(ok).withFailureHandler(bad).updateProperty(PIN,d); }
+    else      { google.script.run.withSuccessHandler(ok).withFailureHandler(bad).addProperty(PIN,d); }
+  }
+
+  /* ── drill-down (right panel / bottom sheet) ── */
+  function openDrill(metric){
+    if(!LAST) return; var d=LAST, title='', val='', body='';
+    function chTable(obj){ var ks=Object.keys(obj).sort(function(a,b){return obj[b].net-obj[a].net;});
+      if(!ks.length) return '<div class="hint">No data.</div>';
+      return '<table><thead><tr><th>Channel</th><th class="num">Bk</th><th class="num">Net</th></tr></thead><tbody>'+
+        ks.map(function(k){return '<tr><td>'+esc(k)+'</td><td class="num">'+obj[k].c+'</td><td class="num">'+inr(obj[k].net)+'</td></tr>';}).join('')+'</tbody></table>'; }
+    function typeTable(obj){ return '<table><thead><tr><th>Type</th><th class="num">Bk</th><th class="num">Net</th></tr></thead><tbody>'+
+        ['Stay','Resold','Pass'].map(function(k){var o=obj[k]||{c:0,net:0};return '<tr><td>'+k+'</td><td class="num">'+o.c+'</td><td class="num">'+inr(o.net)+'</td></tr>';}).join('')+'</tbody></table>'; }
+    function matrixTable(mx){
+      var chans=Object.keys(mx); if(!chans.length) return '<div class="hint">No data.</div>';
+      var types=['Stay','Resold','Pass'], colTot={Stay:0,Resold:0,Pass:0}, grand=0;
+      function nf(n){ return n ? Math.round(n).toLocaleString('en-IN') : '<span class="z">–</span>'; }
+      chans.sort(function(a,b){ var ta=types.reduce(function(s,t){return s+(mx[a][t]||0);},0), tb=types.reduce(function(s,t){return s+(mx[b][t]||0);},0); return tb-ta; });
+      var rows=chans.map(function(ch){ var rt=0;
+        var tds=types.map(function(t){ var v=mx[ch][t]||0; colTot[t]+=v; rt+=v; return '<td class="num">'+nf(v)+'</td>'; }).join('');
+        grand+=rt; return '<tr><td>'+esc(ch)+'</td>'+tds+'<td class="num tcol">'+nf(rt)+'</td></tr>'; }).join('');
+      var foot='<tr class="total"><td>Total</td>'+types.map(function(t){return '<td class="num">'+nf(colTot[t])+'</td>';}).join('')+'<td class="num tcol">'+nf(grand)+'</td></tr>';
+      return '<table class="mx"><thead><tr><th>Channel</th><th class="num">Stay</th><th class="num">Resold</th><th class="num">Pass</th><th class="num">Total</th></tr></thead><tbody>'+rows+foot+'</tbody></table>';
+    }
+    var k=d.kpis||{}, m=d.kpisMonth||{totalRev:0,totalExp:0,netPnL:0,bookings:0}, mn=d.currentMonth||'This month';
+    if(metric==='revenue'){ title='Total Revenue'; val=inr(k.totalRev); body='<h4>Net revenue (₹) · channel × booking type</h4>'+matrixTable(d.revMatrix||{}); }
+    else if(metric==='expense'){ title='Total Expense'; val=inr(k.totalExp); var e=d.expenses||{};
+      body='<h4>By bucket</h4>'+sl('One-time',e.oneTime)+sl('Recurring',e.recurring)+sl('Operating',e.operating)+sl('Total Expense',e.total,true);
+      var ec=d.expenseByCategory||{}, cks=Object.keys(ec).sort(function(a,b){return ec[b]-ec[a];});
+      body+='<h4>By category</h4>'+(cks.length?cks.map(function(c){return sl(c,ec[c]);}).join(''):'<div class="hint">No data.</div>'); }
+    else if(metric==='pnl'){ title='Net P&L (overall)'; val=inr(k.netPnL);
+      body='<h4>Components</h4>'+sl('Revenue',k.totalRev)+sl('Less: Total Expense',-k.totalExp)+sl('Net P&L',k.netPnL,true)+'<div class="hint" style="margin-top:8px">Refundable deposits are excluded.</div>'; }
+    else if(metric==='bookings'){ title='Bookings'; val=k.bookings; body='<h4>By type</h4>'+typeTable(d.byType||{})+'<h4>By channel</h4>'+chTable(d.byChannel||{}); }
+    else if(metric==='mrevenue'){ title=mn+' · Revenue'; val=inr(m.totalRev); body='<h4>By booking type</h4>'+typeTable(d.monthByType||{})+'<h4>By channel</h4>'+chTable(d.monthByChannel||{}); }
+    else if(metric==='recurring'){ title=mn+' · Expense'; val=inr(m.totalExp);
+      body='<h4>By bucket</h4>'+sl('Recurring',m.recurExp||0)+sl('Operating',m.operExp||0)+sl('Total Expense',m.totalExp,true)+recurBody(d.recurringChecklist||[], m.recurExp||0); }
+    else if(metric==='mpnl'){ title=mn+' · Net P&L'; val=inr(m.netPnL); body='<h4>Components</h4>'+sl('Revenue',m.totalRev)+sl('Less: Expense',-m.totalExp)+sl('Net P&L',m.netPnL,true)+'<div class="hint" style="margin-top:8px">Expense = Recurring + Operating (one-time setup excluded).</div>'; }
+    else if(metric==='mbookings'){ title=mn+' · Bookings'; val=m.bookings; body='<h4>By type</h4>'+typeTable(d.monthByType||{}); }
+    document.getElementById('dwTitle').textContent=title;
+    document.getElementById('dwVal').textContent=val;
+    document.getElementById('dwBody').innerHTML=body;
+    document.getElementById('ovl').classList.add('show');
+    document.getElementById('drawer').classList.add('show');
+  }
+  function sl(label,amt,tot){ return '<div class="sumline'+(tot?' tot':'')+'"><span>'+esc(label)+'</span><span>'+inr(amt)+'</span></div>'; }
+  function recurBody(list,total){
+    var matched=0, addedN=0;
+    list.forEach(function(x){ if(x.added){ matched+=x.amount; addedN++; } });
+    var h='<h4>Recurring charges · '+addedN+' of '+list.length+' added</h4>';
+    h+= list.map(function(x){
+      return '<div class="chk"><span class="nm"><span class="dot '+(x.added?'ok':'no')+'">'+(x.added?'✓':'—')+'</span>'+esc(x.name)+'</span>'+
+             (x.added ? '<span>'+inr(x.amount)+'</span>' : '<span class="tag no">Not added</span>')+'</div>';
+    }).join('');
+    var other=Math.round((total||0)-matched);
+    if(other>0) h+='<div class="sumline" style="margin-top:10px"><span>Other recurring</span><span>'+inr(other)+'</span></div>';
+    return h;
+  }
+  function closeDrill(){ document.getElementById('ovl').classList.remove('show'); document.getElementById('drawer').classList.remove('show'); }
+
+  /* ── logs (Booking Logs / Expense Logs) ── */
+  function openLogs(which, el){
+    showView(which, el);
+    google.script.run.withSuccessHandler(function(res){ LOGS=res; buildLog('blog', res.bookings); buildLog('elog', res.expenses); })
+      .withFailureHandler(function(e){ toast(e.message||'Failed to load logs', false); }).getLogs(PIN);
+  }
+  function buildLog(prefix, block){
+    var cont=document.getElementById(prefix+'Table');
+    if(!block || !block.rows || !block.rows.length){ cont.innerHTML='<div class="hint">No rows yet.</div>'; return; }
+    var headers=block.headers;
+    block.rows.sort(function(a,b){
+      var ka=(prefix==='elog')?(a.cells[0]||a.cells[1]||''):(a.cells[0]||'');
+      var kb=(prefix==='elog')?(b.cells[0]||b.cells[1]||''):(b.cells[0]||'');
+      return ka<kb?1:(ka>kb?-1:0);   // newest first
+    });
+    var thead='<thead><tr>'+headers.map(function(h){return '<th>'+esc(h)+'</th>';}).join('')+'</tr>'+
+      '<tr class="filtrow">'+headers.map(function(h,i){return '<th><input class="colf" data-col="'+i+'" placeholder="filter" oninput="filterLog(\''+prefix+'\')"></th>';}).join('')+'</tr></thead>';
+    var tbody='<tbody>'+block.rows.map(function(o){
+      return '<tr title="Click to edit" onclick="editFromLog(\''+prefix+'\','+o.r+')">'+o.cells.map(function(c){ return '<td>'+esc(c)+'</td>'; }).join('')+'</tr>';
+    }).join('')+'</tbody>';
+    cont.innerHTML='<table class="logtbl">'+thead+tbody+'</table>';
+  }
+  function setv(id,v){ var el=document.getElementById(id); if(el) el.value=(v==null?'':v); }
+  function navBtn(v){ return document.querySelector('nav button[data-view="'+v+'"]'); }
+  function afterEdit(from){ loadDashboard(); openLogs(from, navBtn(from)); }
+  function backToLogs(type){
+    var ed=(type==='booking')?EDITB:EDITE, from=ed?ed.from:(type==='booking'?'blog':'elog');
+    if(type==='booking') resetBooking(); else resetExpense();
+    showView(from, navBtn(from));
+  }
+  function deleteEntry(type){
+    var ed=(type==='booking')?EDITB:EDITE; if(!ed) return;
+    if(!confirm('Delete this '+type+' permanently? This cannot be undone.')) return;
+    var btn=document.getElementById(type==='booking'?'b_delete':'e_delete'), from=ed.from;
+    btn.disabled=true; btn.textContent='Deleting…';
+    var ok=function(res){ btn.disabled=false; btn.textContent='Delete'; toast(res.message,true); if(type==='booking')resetBooking(); else resetExpense(); afterEdit(from); };
+    var bad=function(e){ btn.disabled=false; btn.textContent='Delete'; toast(e.message,false); };
+    if(type==='booking') google.script.run.withSuccessHandler(ok).withFailureHandler(bad).deleteBooking(PIN, ed.row);
+    else                 google.script.run.withSuccessHandler(ok).withFailureHandler(bad).deleteExpense(PIN, ed.row);
+  }
+  function editFromLog(prefix, rownum){
+    var block=(prefix==='blog')?LOGS.bookings:LOGS.expenses, o=null;
+    block.rows.forEach(function(x){ if(x.r===rownum) o=x; }); if(!o) return; var c=o.cells;
+    if(prefix==='blog'){
+      setv('b_prop',c[1]); setv('b_date',c[0]); setv('b_guest',c[2]); setv('b_birth',c[13]); setv('b_type',c[3]);
+      setv('b_channel',c[4]); setv('b_referrer',c[5]); setv('b_list',c[6]); setv('b_disc',c[7]); setv('b_gp',c[8]);
+      setv('b_net',c[9]); setv('b_comm',c[10]); setv('b_guests',c[16]); setv('b_phone',c[12]); setv('b_coguest',c[14]); setv('b_cobirth',c[15]); setv('b_notes',c[11]);
+      EDITB={row:rownum, bookingId:c[17], from:'blog'};
+      document.getElementById('b_submit').textContent='Save changes';
+      var bm=document.getElementById('b_editmsg'); bm.textContent='Editing '+(c[17]||'booking')+' — Save to update, Delete to remove, or Clear to cancel.'; bm.classList.remove('hidden');
+      document.getElementById('b_delete').classList.remove('hidden');
+      document.getElementById('b_back').classList.remove('hidden');
+      showView('book', navBtn('book'));
+    } else {
+      setv('e_prop',c[2]); setv('e_month',String(c[1]||'').slice(0,7)); setv('e_date',c[0]); setv('e_cat',c[3]); setv('e_item',c[4]);
+      setv('e_amount',c[6]); setv('e_type',c[7]); setv('e_ref',c[9]); setv('e_qty',c[5]); setv('e_vendor',c[10]); setv('e_status',c[8]); setv('e_notes',c[11]);
+      EDITE={row:rownum, from:'elog'};
+      document.getElementById('e_submit').textContent='Save changes';
+      var em=document.getElementById('e_editmsg'); em.textContent='Editing this expense — Save to update, Delete to remove, or Clear to cancel.'; em.classList.remove('hidden');
+      document.getElementById('e_delete').classList.remove('hidden');
+      document.getElementById('e_back').classList.remove('hidden');
+      showView('exp', navBtn('exp'));
+    }
+    window.scrollTo(0,0);
+  }
+  function filterLog(prefix){
+    var search=(document.getElementById(prefix+'Search').value||'').toLowerCase();
+    var filters=[].slice.call(document.querySelectorAll('#'+prefix+'Table .colf')).map(function(i){ return (i.value||'').toLowerCase(); });
+    var trs=document.querySelectorAll('#'+prefix+'Table tbody tr');
+    for(var j=0;j<trs.length;j++){
+      var cells=trs[j].children, ok=true, all='';
+      for(var i=0;i<cells.length;i++){ var txt=cells[i].textContent.toLowerCase(); all+=' '+txt; if(filters[i] && txt.indexOf(filters[i])<0){ ok=false; break; } }
+      if(ok && search && all.indexOf(search)<0) ok=false;
+      trs[j].style.display = ok ? '' : 'none';
+    }
+  }
+
+  /* ── utils ── */
+  function esc(s){ return String(s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+  function jsq(s){ return String(s).replace(/'/g,"\\'"); }
+  var toastTimer;
+  function toast(msg, ok){
+    var t=document.getElementById('toast'); t.textContent=msg; t.className='show '+(ok?'ok':'bad');
+    clearTimeout(toastTimer); toastTimer=setTimeout(function(){ t.className=''; },3200);
+  }
+</script>
+</body>
+</html>

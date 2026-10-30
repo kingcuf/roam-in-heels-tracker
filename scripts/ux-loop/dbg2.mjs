@@ -1,0 +1,16 @@
+import { chromium } from 'playwright';
+const b=await chromium.launch();
+const c=await b.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true,deviceScaleFactor:3});
+const p=await c.newPage();
+p.on('console',m=>console.log('CONSOLE',m.type(),m.text().slice(0,300)));
+p.on('pageerror',e=>console.log('PAGEERR',String(e).slice(0,400)));
+await p.goto('http://127.0.0.1:8124/',{waitUntil:'load'});
+await p.waitForTimeout(11000);
+console.log('--- launch 2 ---');
+await p.goto('http://127.0.0.1:8124/',{waitUntil:'load'});
+await p.waitForTimeout(25000);
+console.log('txt:',JSON.stringify((await p.evaluate(()=>document.body.innerText)).slice(0,200)));
+console.log('html len:',(await p.content()).length);
+console.log('root children:',await p.evaluate(()=>document.getElementById('root')?.innerHTML.length));
+await p.screenshot({path:'/tmp/ux-out/dbg-launch2.png'});
+await b.close();

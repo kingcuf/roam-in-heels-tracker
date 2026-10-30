@@ -1,0 +1,29 @@
+PASS | E1 app loads to login screen
+PASS | E2 login works, dashboard renders
+PASS | E3 calendar section replaces old ones
+PASS | E4 month title = current month
+PASS | E5 day 12 shows ₹6.3K
+PASS | E6 day 12 shows pending ₹1.2K
+PASS | E7 day 14 shows ₹1.8K net + pending
+PASS | E8 legend hint present
+PASS | E9 today (14th) has filled circle — bg=rgb(17, 17, 20)
+PASS | E10 select 13th → bar appears with ₹0
+PASS | E11 13th sheet: 0 bookings, check-in listed
+PASS | E12 13th sheet: date header
+PASS | E13 bar: 3 dates aggregated
+PASS | E14 bar: net ₹8,137
+PASS | E15 bar: 3 bookings
+PASS | E16 bar: comm ₹1,666
+PASS | E17 bar: due ₹3,040
+PASS | E18 sheet: title "3 dates selected"
+PASS | E19 sheet: booking-wise rows present
+PASS | E20 sheet: pending total line
+PASS | E21 deselect 13th → 2 dates
+PASS | E22 clear selection → bar gone
+PASS | E23 back → June 2026 + Today chip
+PASS | E24 Today chip returns to July
+PASS | E25 forward disabled at max month
+PASS | E26 back bound stops at earliest data month — earliest=May 2026
+PASS | E27 all July amounts match sheet data
+PASS | E28 13th cell has no amount (check-in only) — cell="13"
+PASS | E29 pending days show red due amount (3, 6, 12, 14) — 3="3 | ₹6.7K | ₹2.9K" 6="6 | ₹6.2K | ₹2.9K" 14="14 | ₹1.8K | ₹1.8K"

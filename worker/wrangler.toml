@@ -1,0 +1,38 @@
+name = "spira-api"
+main = "src/index.js"
+compatibility_date = "2026-05-01"
+
+# Publish on the account's workers.dev subdomain. Without this the Worker
+# deploys but has no reachable URL ("No URLs enabled" in the dashboard).
+workers_dev = true
+
+# D1 binding. `database_id` is filled in by:
+#   npx wrangler d1 create spira
+# and is safe to commit — it is an identifier, not a credential.
+[[d1_databases]]
+binding = "DB"
+database_name = "spira"
+database_id = "444a67b8-098a-4a06-9469-030b6836ccc3"
+
+# R2 bucket for ID documents / guest photos / receipts. Created 19-Aug-2026,
+# Standard storage class (the only class the free tier covers).
+#
+# PRIVATE bucket, deliberately: nothing here is ever served from a bucket URL.
+# Downloads are streamed back through the Worker behind the PIN check, so an
+# identity document never sits on a publicly guessable address. Do not attach a
+# public r2.dev domain to it.
+#
+# The binding name is FILES because that is what src/attachments.js reads —
+# wrangler's suggested `spira_files` would leave env.FILES undefined and every
+# upload would fail with "File storage is not configured".
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "spira-files"
+
+# The PIN is a secret, not a var — set it with:
+#   npx wrangler secret put PIN
+# (The old Apps Script had it hardcoded in source as a literal.)
+
+# One-way mirror back into the Google Sheet, 06:00 IST daily (00:30 UTC).
+[triggers]
+crons = ["30 0 * * *"]

@@ -1,0 +1,8 @@
+# Mirror.gs is NOT part of this project any more — it lives in ../gas-mirror,
+# deployed as its own script (Spira Tracker — Sheet Mirror, 1x6c9nTKa31a0…).
+#
+# Pushing it here would upload a second doGet() alongside Code.js's, and the
+# last definition wins — that would silently break the live read/write API this
+# project serves. The stale copy is left on disk only so nothing is lost; edit
+# ../gas-mirror/Mirror.gs instead.
+Mirror.gs

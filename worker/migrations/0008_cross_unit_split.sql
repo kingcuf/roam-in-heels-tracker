@@ -1,0 +1,39 @@
+-- Cross-unit commission split
+--
+-- The owner runs two flats. A booking that comes in on one unit's listing but
+-- houses the guest in the other used to credit the whole net to the unit that
+-- took it, so one flat's month flattered itself with money the other flat had
+-- actually earned by giving up a night.
+--
+-- The rule (owner-approved): the receiving unit keeps a flat fee, the rest is
+-- earned by the unit the guest stayed in. The fee is a CAP, never a transfer —
+-- on a booking worth less than the fee the receiving unit simply keeps all of
+-- it and the stay unit earns nothing, so no split can push a unit negative.
+-- The two shares always sum to the booking's net: totals across all properties
+-- never move, only which unit earned them.
+--
+-- Why two columns instead of deriving this at read time:
+--   * split_fee is the rupees the rule actually awarded the receiving unit ON
+--     THE DAY THE BOOKING WAS SAVED. Change the ₹500 rate later and every past
+--     month stays exactly as it was reported — a derived split would silently
+--     restate closed months.
+--   * stay_property resolves the free-text `stay_unit` ('2212', ' 3028 ',
+--     '3103, 3028') to a property NAME once, at save time. Read paths compare
+--     names, never re-parse the free text, so a typo in one booking can never
+--     reinterpret the whole history.
+--
+-- split_fee IS NULL means "no split" and is the only test a read path makes.
+-- Both columns are written together by bookingFields()/splitFor() on every add
+-- and update, so they cannot drift apart.
+--
+-- APPLY WITH `d1 execute --file`, NOT `d1 migrations apply --remote`: the
+-- remote d1_migrations table is empty, so a migrations run would replay 0001
+-- (which DROPs every table) and 0002 against live data.
+--   npx wrangler d1 execute spira --local  --file=migrations/0008_cross_unit_split.sql
+--   npx wrangler d1 execute spira --remote --file=migrations/0008_cross_unit_split.sql
+--
+-- This migration is schema only. Existing rows stay unsplit until the restate
+-- statements in the deploy note are run, so applying it changes no figure.
+
+ALTER TABLE bookings ADD COLUMN stay_property TEXT NOT NULL DEFAULT '';
+ALTER TABLE bookings ADD COLUMN split_fee     REAL;

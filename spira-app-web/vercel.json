@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/assets/node_modules/:path*",
+      "destination": "/assets/nm/:path*"
+    }
+  ]
+}

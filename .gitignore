@@ -1,0 +1,40 @@
+# Dependencies and build output — regenerated, never reviewed, and huge.
+node_modules/
+dist/
+.expo/
+.wrangler/
+.vercel/
+*.tsbuildinfo
+qa/.build/
+
+# Generated native projects (Expo CNG rebuilds them from app.json).
+mobile/android/
+mobile/ios/
+
+# The web export staged into the two Vercel deploy directories. `./sync-web.sh`
+# rebuilds all of it from mobile/; only the hand-written shell (vercel.json, the
+# PWA icons and manifest) is worth keeping under version control.
+spira-tracker/_expo/
+spira-tracker/assets/
+spira-tracker/metadata.json
+spira-app-web/_expo/
+spira-app-web/assets/
+spira-app-web/metadata.json
+
+# ── Never publish ──────────────────────────────────────────────────────────
+# Real guests' names, phone numbers and money. This repository is public; the
+# production data is not part of the software and has no business being in it.
+backups/
+worker/migrations/0002_seed.sql
+worker/scripts/logs.json
+worker/scripts/props.json
+worker/scripts/inv.json
+
+# Local secrets (the PIN that signs in to the live API).
+.dev.vars
+.env
+.env.*
+!.env.example
+
+# macOS
+.DS_Store
