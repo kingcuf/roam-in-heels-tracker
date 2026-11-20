@@ -455,6 +455,26 @@ async function addProperty(env, pin, d) {
   return { ok: true, message: `Property "${d.name}" added`, properties: await readProperties(env) };
 }
 
+/* Every transactional table stores the property NAME, not properties.id (see
+   the schema note in 0001_init.sql). A rename therefore has to be cascaded or
+   the old rows are orphaned: the dashboard filters `property = <selected name>`
+   and a renamed unit reads as a brand-new, empty property. */
+const PROPERTY_NAME_REFS = [
+  ['bookings',  'property'],
+  ['bookings',  'stay_property'],
+  ['expenses',  'property'],
+  ['inv_items', 'property'],
+  ['enquiries', 'property'],
+];
+
+async function renamePropertyRefs(env, oldName, newName) {
+  if (!oldName || !newName || oldName === newName) return 0;
+  const stmts = PROPERTY_NAME_REFS.map(([t, c]) =>
+    env.DB.prepare(`UPDATE ${t} SET ${c} = ? WHERE ${c} = ?`).bind(newName, oldName));
+  const res = await env.DB.batch(stmts);   // one transaction: all tables move together
+  return res.reduce((n, r) => n + ((r.meta && r.meta.changes) || 0), 0);
+}
+
 async function updateProperty(env, pin, d) {
   if (!d.origId) bad('Missing property reference');
   if (!d.name)   bad('Property name is required');
@@ -465,6 +485,14 @@ async function updateProperty(env, pin, d) {
     const clash = await env.DB.prepare('SELECT id FROM properties WHERE id = ?').bind(newId).first();
     if (clash) bad(`Property id "${newId}" is already in use`);
   }
+  const prev = await env.DB.prepare('SELECT name FROM properties WHERE id = ?').bind(d.origId).first();
+  if (!prev) bad('Property not found: ' + d.origId);
+  const oldName = String(prev.name || '');
+  if (d.name !== oldName) {
+    const nameClash = await env.DB.prepare(
+      'SELECT id FROM properties WHERE name = ? AND id <> ?').bind(d.name, d.origId).first();
+    if (nameClash) bad(`Property name "${d.name}" is already used by ${nameClash.id}`);
+  }
   const res = await env.DB.prepare(
     `UPDATE properties
         SET id = ?, name = ?, location = ?, type = ?, status = ?, onboarded = ?, rent = ?, notes = ?
@@ -472,7 +500,14 @@ async function updateProperty(env, pin, d) {
   ).bind(newId, d.name, d.location || '', d.type || '', d.status || 'Active',
          d.onboarded || '', optMoney(d.rent, 'Monthly rent'), d.notes || '', d.origId).run();
   if (!res.meta.changes) bad('Property not found: ' + d.origId);
-  return { ok: true, message: `Property "${d.name}" updated`, properties: await readProperties(env) };
+  const moved = await renamePropertyRefs(env, oldName, d.name);
+  return {
+    ok: true,
+    message: moved
+      ? `Property "${d.name}" updated — ${moved} existing record${moved === 1 ? '' : 's'} re-pointed from "${oldName}"`
+      : `Property "${d.name}" updated`,
+    properties: await readProperties(env),
+  };
 }
 
 /* ─────────────── DASHBOARD ───────────────
