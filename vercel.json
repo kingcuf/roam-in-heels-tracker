@@ -1,0 +1,9 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "installCommand": "npm install --prefix mobile",
+  "buildCommand": "./sync-web.sh",
+  "outputDirectory": "spira-tracker",
+  "rewrites": [
+    { "source": "/assets/node_modules/:path*", "destination": "/assets/nm/:path*" }
+  ]
+}
