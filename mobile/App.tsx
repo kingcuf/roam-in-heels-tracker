@@ -26,6 +26,7 @@ import LogsScreen from './src/screens/LogsScreen';
 import Properties from './src/screens/Properties';
 import Inventory from './src/screens/Inventory';
 import IdSheet from './src/screens/IdSheet';
+import BookingPage from './src/screens/BookingPage';
 import TeamScreen from './src/screens/TeamScreen';
 import IntroFilm from './src/intro/IntroFilm';
 import { markIntroPlayed, shouldPlayIntro } from './src/intro/policy';
@@ -210,6 +211,8 @@ function Root() {
       />
 
 
+      {/* full-screen booking page, over the tabs and the tab bar */}
+      <BookingPage />
       {/* guest-ID upload, opened from the Action tab's IDs pending list */}
       <IdSheet />
       <Loader visible={s.busy} />

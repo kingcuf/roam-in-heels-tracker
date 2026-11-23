@@ -4,7 +4,6 @@ import { C, F } from '../theme';
 import { useStore } from '../store';
 import { Btn, Panel, SearchInput, Sheet, useToast } from '../ui';
 import { LogBlock, parseExtraGuests } from '../logic';
-import { BookingChecklist } from '../checklist';
 
 const PER_PAGE = 50;
 const COL_W = 110;
@@ -84,7 +83,12 @@ export default function LogsScreen({ which, embedded }: { which: 'blog' | 'elog'
   const [sheetOpen, setSheetOpen] = useState(false);
   const navTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (navTimer.current) clearTimeout(navTimer.current); }, []);
-  const openPreview = (o: LogRow) => { setPreview(o); setSheetOpen(true); };
+  /* A booking has its own full page (BookingPage); expenses and savings keep
+     the preview sheet. */
+  const openPreview = (o: LogRow) => {
+    if (which === 'blog') { s.openBooking(o.r); return; }
+    setPreview(o); setSheetOpen(true);
+  };
   const canChange = s.can(kind + '.update') || s.can(kind + '.delete');
   const editFromPreview = () => {
     const o = preview;
@@ -234,7 +238,6 @@ export default function LogsScreen({ which, embedded }: { which: 'blog' | 'elog'
               <Text style={st.pLbl}>Row ID</Text>
               <Text style={[st.pVal, { color: C.muted }]}>{preview.r}</Text>
             </View>
-            {which === 'blog' ? <BookingChecklist row={preview.r} /> : null}
             {canChange ? (
               <Btn
                 title={s.needsApproval ? 'Request a change' : 'Edit this ' + kind}

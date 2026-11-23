@@ -242,13 +242,8 @@ export default function ActionScreen() {
     return pick && !/pdf/i.test(pick.type || '') ? pick.id : undefined;
   };
 
-  const openBooking = (row: number) => {
-    const o = s.logs?.bookings?.rows?.find((x) => x.r === row);
-    if (!o || !s.addSegs.includes('book')) return;   // no booking rights → no form to open
-    s.setEditB({ row, bookingId: String(o.cells[18] || ''), from: 'blog', cells: o.cells });
-    s.setAddSeg('book');
-    s.setTab('add');
-  };
+  /* The booking page; editing is one tap from there. */
+  const openBooking = (row: number) => s.openBooking(row);
 
   /* ── add / edit an action ── */
   if (form) {

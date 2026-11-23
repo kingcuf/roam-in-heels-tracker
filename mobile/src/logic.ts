@@ -1482,3 +1482,42 @@ export function checklistFor(
   return out.sort((a, b) =>
     (STAGE_ORDER[a.stage] - STAGE_ORDER[b.stage]) || (Number(a.own) - Number(b.own)) || (a.id - b.id));
 }
+
+/* ── Booking page ──────────────────────────────────────────────────────────
+   The number on the banner is where the guest actually sleeps: the stay unit
+   when one was typed (it can be a flat we don't own — a resold stay in 3130),
+   otherwise the unit number inside the stay property's name ("Spira 3028",
+   "403, Plot no 685, Sector 45"). */
+export function bannerUnitOf(c: any[]): string {
+  const typed = String(c[24] ?? '').trim();
+  if (typed) return typed;
+  const m = stayPropOf(c).match(/\d{3,4}/);
+  return m ? m[0] : '';
+}
+
+/* Where the stay is relative to today, in the words a manager would use. */
+export type StayPhase = 'none' | 'upcoming' | 'arriving' | 'inhouse' | 'leaving' | 'past';
+export function stayPhase(inD: Date | null, outD: Date | null, now: Date = new Date()): { phase: StayPhase; label: string } {
+  if (!inD) return { phase: 'none', label: 'No stay dates' };
+  const day = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const t = day(now), a = day(inD), b = outD ? day(outD) : a;
+  const DAY = 86400000;
+  if (t < a) {
+    const n = Math.round((a - t) / DAY);
+    return { phase: 'upcoming', label: n === 1 ? 'Arrives tomorrow' : 'Arrives in ' + n + ' days' };
+  }
+  if (t === a) return { phase: 'arriving', label: b === a ? 'Day use today' : 'Arriving today' };
+  if (t < b) {
+    const nights = Math.round((b - a) / DAY), k = Math.round((t - a) / DAY) + 1;
+    return { phase: 'inhouse', label: 'In-house · night ' + k + ' of ' + nights };
+  }
+  if (t === b) return { phase: 'leaving', label: 'Checking out today' };
+  return { phase: 'past', label: 'Checked out' };
+}
+
+/* Age from a birth year cell, '' when the year is missing or implausible. */
+export function ageFrom(birthYr: any, now: Date = new Date()): string {
+  const y = parseInt(String(birthYr ?? '').trim(), 10);
+  if (!y || y < 1900 || y > now.getFullYear()) return '';
+  return String(now.getFullYear() - y);
+}

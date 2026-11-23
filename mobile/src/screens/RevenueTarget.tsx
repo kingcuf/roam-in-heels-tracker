@@ -9,7 +9,6 @@ import {
 import { Btn, Hint, Panel, PanelTitle, Segmented, Sheet, useToast } from '../ui';
 import { Field, TxtInput } from '../fields';
 import { TargetChart, kShort } from '../charts';
-import { BookingDetail } from '../bookingDetail';
 
 /* ── Daily revenue vs target ──
    "Are we making our number?" — one panel on the Report, answering it two ways
@@ -52,11 +51,9 @@ export default function RevenueTarget() {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [saving, setSaving] = useState(false);
-  /* The day sheet: which day is open, and which booking in it (row id) is
-     showing its detail. One sheet whose content swaps, not two stacked
-     Modals — stacking them is what leaves dead windows behind. */
+  /* The day sheet: which day's bookings are listed. A booking opens on its
+     own page (BookingPage); its back button reopens this day. */
   const [dayOpen, setDayOpen] = useState<string | null>(null);
-  const [detailRow, setDetailRow] = useState<number | null>(null);
   const navTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (navTimer.current) clearTimeout(navTimer.current); }, []);
   const isAdmin = s.me?.role === 'Admin';
@@ -129,8 +126,8 @@ export default function RevenueTarget() {
   const pctTxt = (p: number) => (p >= 100 ? '▲ ' + Math.round(p - 100) + '% above' : '▼ ' + Math.round(100 - p) + '% below');
 
   /* ── day sheet ── */
-  const openDay = (k: string) => { setSel(k); setDetailRow(null); setDayOpen(k); };
-  const closeDay = () => { setDayOpen(null); setDetailRow(null); };
+  const openDay = (k: string) => { setSel(k); setDayOpen(k); };
+  const closeDay = () => setDayOpen(null);
   const rowsById = useMemo(() => {
     const m = new Map<number, { r: number; cells: any[] }>();
     for (const o of s.logs?.bookings?.rows || []) m.set(o.r, o);
@@ -143,27 +140,18 @@ export default function RevenueTarget() {
     .map((it) => { const o = rowsById.get(it.r); return o ? { it, c: cardOf(o) } : null; })
     .filter((x): x is { it: DayRev['items'][number]; c: ReturnType<typeof cardOf> } => !!x)
     .sort((a, b) => b.it.amt - a.it.amt);
-  const detailItem = detailRow === null ? null : (openDayRev?.items || []).find((it) => it.r === detailRow) || null;
-  const detailRowObj = detailRow === null ? null : rowsById.get(detailRow) || null;
-  const detail = detailRowObj ? cardOf(detailRowObj) : null;
-  const sheetTitle = detail
-    ? (detail.guest || detail.id || 'Booking')
-    : dayOpen ? (dayOpen === todayKey ? 'Today, so far' : dayLabel(dayOpen)) : '';
-  const sheetValue = detail
-    ? inr(detail.net) + (detail.id ? ' · ' + detail.id : '')
-    : openDayRev ? inr(openDayRev.rev) + ' · ' + openDayRev.n + ' ' + (openDayRev.n === 1 ? unit[0] : unit[1]) : '';
-  /* Same hand-off as the Calendar: close, let the dismissal finish, then open
-     the booking in the Add tab's form. */
-  const editBooking = (row: number) => {
-    const o = rowsById.get(row);
-    if (!o || !s.addSegs.includes('book')) return;
+  const sheetTitle = dayOpen ? (dayOpen === todayKey ? 'Today, so far' : dayLabel(dayOpen)) : '';
+  const sheetValue = openDayRev ? inr(openDayRev.rev) + ' · ' + openDayRev.n + ' ' + (openDayRev.n === 1 ? unit[0] : unit[1]) : '';
+  /* Close the sheet, let its dismissal finish (two Modals on top of each
+     other leave dead windows behind), then open the booking page; its back
+     button brings this day back. */
+  const openBookingOf = (row: number) => {
+    const day = dayOpen;
     closeDay();
     if (navTimer.current) clearTimeout(navTimer.current);
     navTimer.current = setTimeout(() => {
       navTimer.current = null;
-      s.setEditB({ row, bookingId: String(o.cells[18] || ''), from: 'blog', cells: o.cells });
-      s.setAddSeg('book');
-      s.setTab('add');
+      s.openBooking(row, day ? () => openDay(day) : undefined);
     }, SHEET_DISMISS_MS);
   };
   /* Leaving the Report with the sheet open closes it, as on the Calendar. */
@@ -287,19 +275,7 @@ export default function RevenueTarget() {
       )}
 
       <Sheet visible={!!dayOpen} title={sheetTitle} value={sheetValue} onClose={closeDay}>
-        {detail ? (
-          <View>
-            <TouchableOpacity onPress={() => setDetailRow(null)} style={st.back} hitSlop={8}>
-              <Text style={st.backTxt}>‹  {dayOpen === todayKey ? 'Today' : dayOpen ? dayLabel(dayOpen) : ''}</Text>
-            </TouchableOpacity>
-            {detailItem && basis === 'stay' && detailItem.nights ? (
-              <Text style={st.share}>
-                {'Counts ' + inr(detailItem.amt) + ' on this day — night ' + detailItem.night + ' of ' + detailItem.nights + '.'}
-              </Text>
-            ) : null}
-            <BookingDetail b={detail} onEdit={s.addSegs.includes('book') ? () => editBooking(detail.row) : undefined} />
-          </View>
-        ) : openDayRev ? (
+        {openDayRev ? (
           <View>
             {target ? (
               <Text style={[st.share, { color: openDayRev.rev >= target ? C.green : C.red }]}>
@@ -316,7 +292,7 @@ export default function RevenueTarget() {
               </Text>
             ) : dayItems.map(({ it, c }) => (
               <TouchableOpacity key={it.r + ':' + (it.night || 0)} style={st.bRow} activeOpacity={0.6}
-                onPress={() => setDetailRow(it.r)} accessibilityRole="button">
+                onPress={() => openBookingOf(it.r)} accessibilityRole="button">
                 <View style={{ flex: 1 }}>
                   <Text style={st.bGuest} numberOfLines={1}>{c.guest || c.id || 'Booking'}</Text>
                   <Text style={st.bSub} numberOfLines={1}>

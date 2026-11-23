@@ -1,8 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { PanResponder, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { C, F, inr } from '../theme';
-import { Btn, Sheet } from '../ui';
-import { BookingChecklist } from '../checklist';
 import { useStore } from '../store';
 import { addMonth, fmtDayKey, monthTitle } from '../calendar';
 import { Stay, ciFmtDay, computeStays, dayKeyOf, keyToDate, nightsInRange, thisMonthIso, todayIso } from '../logic';
@@ -37,9 +35,6 @@ const BAR_GAP = 3;
 /* A bar never shrinks to nothing, and never touches the cell edge it does not
    reach: an 11:59pm checkout still has to look like it ended inside its day. */
 const EDGE = 0.1;
-/* Long enough to outlast the modal's slide-out (RN animates it over 250ms)
-   before the tab switch hides this screen. See editStay. */
-const SHEET_DISMISS_MS = 320;
 
 /* Property colours, assigned by position in the property list so a flat keeps
    its colour across months rather than by hashing the name. */
@@ -73,7 +68,6 @@ export default function CalendarScreen() {
   const [mk, setMk] = useState(curMonthKey());
   const [sel, setSel] = useState<string | null>(todayKey());
   const [sheet, setSheet] = useState(false);
-  const [stay, setStay] = useState<Stay | null>(null);
   /* The calendar's own property scope. Independent of the Report tab on
      purpose: choosing one flat to look at a month should not silently re-cut
      every figure on the Report. */
@@ -257,38 +251,8 @@ export default function CalendarScreen() {
      something you read; dropping into a form full of inputs on a stray tap is
      how a wrong value gets saved. Editing is still one deliberate tap away,
      from inside the detail sheet. */
-  const showStay = (x: Stay) => { setSheet(false); setStay(x); };
+  const showStay = (x: Stay) => { setSheet(false); s.openBooking(x.row); };
 
-  /* Leaving for the edit form is a two-step move, and the order is the whole
-     point.
-
-     A Sheet is a native Modal — its own window on iOS and Android, sitting
-     above the app. Switching tabs hides this screen with `display: none`
-     (every tab stays mounted so drafts survive). Closing the sheet and
-     switching tabs in the same commit therefore asks the platform to dismiss a
-     modal whose host view is being torn out from under it in the same frame —
-     and the dismissal is dropped. The window stays attached, transparent and
-     empty, on top of everything. The calendar underneath renders perfectly and
-     nothing is tappable, because every touch lands on that dead window.
-
-     So: close the sheet, let the dismissal actually finish, and only then
-     switch tabs. */
-  const navTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => { if (navTimer.current) clearTimeout(navTimer.current); }, []);
-
-  const editStay = (row: number) => {
-    const o = s.logs?.bookings?.rows?.find((y) => y.r === row);
-    if (!o || !s.addSegs.includes('book')) return;   // no booking rights → no form to open
-    setSheet(false);
-    setStay(null);
-    if (navTimer.current) clearTimeout(navTimer.current);
-    navTimer.current = setTimeout(() => {
-      navTimer.current = null;
-      s.setEditB({ row, bookingId: String(o.cells[18] || ''), from: 'blog', cells: o.cells });
-      s.setAddSeg('book');
-      s.setTab('add');
-    }, SHEET_DISMISS_MS);
-  };
 
   /* Belt and braces for every other way out of this tab (the tab bar itself,
      mostly): if the screen is re-entered with a sheet still open, close it
@@ -296,7 +260,7 @@ export default function CalendarScreen() {
      dismisses against a live host rather than a hidden one. Returning to a
      stale sheet you opened ten minutes ago is not wanted either way. */
   useEffect(() => {
-    if (s.tab === 'cal') { setSheet(false); setStay(null); }
+    if (s.tab === 'cal') setSheet(false);
   }, [s.tab]);
 
   return (
@@ -468,69 +432,6 @@ export default function CalendarScreen() {
         />
       ) : null}
 
-      {/* Read-only booking detail. Everything the row holds about the stay, and
-          one button for the one thing that changes it. */}
-      <Sheet
-        visible={!!stay}
-        title={stay ? (stay.guest || stay.id) : ''}
-        value={stay ? (stay.sameDay ? 'Day use' : stay.nights + ' night' + (stay.nights === 1 ? '' : 's')) + ' · ' + inr(stay.net) : ''}
-        onClose={() => setStay(null)}
-      >
-        {stay ? <StayDetail x={stay} onEdit={() => editStay(stay.row)} /> : null}
-      </Sheet>
-    </View>
-  );
-}
-
-function Row({ label, value, tone }: { label: string; value: string; tone?: string }) {
-  return (
-    <View style={st.dRow}>
-      <Text style={st.dLbl}>{label}</Text>
-      <Text style={[st.dVal, tone ? { color: tone } : null]}>{value || '—'}</Text>
-    </View>
-  );
-}
-
-function StayDetail({ x, onEdit }: { x: Stay; onEdit: () => void }) {
-  const when = (k: string, t: string) => ciFmtDay(keyToDate(k)) + (t ? ' · ' + t : '');
-  return (
-    <View>
-      <View style={st.dHead}>
-        <View style={st.dPill}>
-          <Text style={st.dPillLbl}>BOOKING</Text>
-          <Text style={st.dPillTxt} numberOfLines={1}>{x.prop || '—'}</Text>
-        </View>
-        <View style={[st.dPill, st.dPillGold]}>
-          <Text style={[st.dPillLbl, { color: C.blue2 }]}>STAY UNIT</Text>
-          <Text style={[st.dPillTxt, { color: C.blue2 }]} numberOfLines={1}>{x.unit || '—'}</Text>
-        </View>
-        {x.channel ? (
-          <View style={st.dSrc}><Text style={st.dSrcTxt}>{x.channel}</Text></View>
-        ) : null}
-      </View>
-
-      <Row label="Check-in" value={when(x.inK, x.inT)} tone={C.navy} />
-      <Row
-        label="Check-out"
-        value={x.assumedOut ? 'not recorded' : when(x.outK, x.outT)}
-        tone={x.assumedOut ? C.muted : C.navy}
-      />
-      {/* A day-use booking really is zero nights; saying "0" alone reads like a
-          missing value. */}
-      <Row label="Nights" value={x.sameDay ? 'Day use · 0 nights' : String(x.nights)} />
-      <Row label="Guests" value={x.guests ? String(x.guests) : ''} />
-      {x.coGuest ? <Row label="Co-guest" value={x.coGuest} /> : null}
-      <Row label="Type" value={x.type} />
-      {x.type === 'Resold' && x.referrer ? <Row label="Resold" value={x.referrer} tone={C.blue2} /> : null}
-      {x.type !== 'Resold' && x.referrer ? <Row label="Source" value={x.referrer} /> : null}
-      <Row label="Total paid" value={x.paid ? inr(x.paid) : ''} />
-      <Row label="Net earning" value={inr(x.net)} tone={C.green} />
-      <Row label="Awaiting payout" value={x.pending > 0 ? inr(x.pending) : '—'} tone={x.pending > 0 ? C.red : C.muted} />
-      {x.notes ? <Row label="Notes" value={x.notes} /> : null}
-
-      <BookingChecklist row={x.row} />
-
-      <Btn title="Edit this booking" onPress={onEdit} style={{ marginTop: 16 }} />
     </View>
   );
 }
