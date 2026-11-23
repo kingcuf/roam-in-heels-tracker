@@ -19,6 +19,7 @@
  */
 
 import { runMirror } from './mirror.js';
+import { photosData, uploadPropertyPhoto, deletePropertyPhoto, deletePropertyPhotos, albumPage, albumImage } from './photos.js';
 import { clientIp, throttleCheck, recordFail, clearFails } from './throttle.js';
 import { uploadAvatar, deleteAvatar, getAvatar, avatarAt, avatarMap } from './avatars.js';
 import { idStatus, idDocs, listAttachments, uploadAttachment, getAttachment, deleteAttachment, sweepExpiredIds, AttachError, deleteBookingAttachments, messageImages, uploadMessageImage, deleteMessageImage } from './attachments.js';
@@ -188,6 +189,11 @@ export default {
         return reply(p, await submitEnquiry(env, await request.json()));
       }
 
+      /* A unit's public photo album — the link sent to a guest. No sign-in;
+         gated by the per-album token instead (see photos.js). */
+      if (p.action === 'album') return await albumPage(env, p, url.origin);
+      if (p.action === 'albumImg') return await albumImage(env, p);
+
       /* Central sign-in + brute-force throttle. `user` is blank for the built-in
          owner account (the PIN secret), so pre-username clients still work. */
       const ip = clientIp(request);
@@ -220,6 +226,10 @@ export default {
       if (request.method === 'POST' && p.action === 'uploadMessageImage') {
         const form = await request.formData();
         return reply(p, await uploadMessageImage(env, me, Number(form.get('id') || p.id), form.get('file')));
+      }
+      if (request.method === 'POST' && p.action === 'uploadPropertyPhoto') {
+        const form = await request.formData();
+        return reply(p, await uploadPropertyPhoto(env, me, String(form.get('property') || p.property || ''), form.get('file')));
       }
       if (request.method === 'POST' && p.action === 'uploadAvatar') {
         const form = await request.formData();
@@ -279,7 +289,7 @@ export default {
         case 'addExpense':     out = await addExpense(env, pin, payload); break;
         case 'addProperty':    out = await addProperty(env, pin, payload); break;
         case 'updateProperty': out = await updateProperty(env, pin, payload); break;
-        case 'logs':           out = await getLogs(env, pin); break;
+        case 'logs':           out = await getLogs(env, pin, url.origin); break;
         case 'updateBooking':  out = await updateBooking(env, pin, row, payload); break;
         case 'updateExpense':  out = await updateExpense(env, pin, row, payload); break;
         case 'deleteBooking':  out = await deleteRowById(env, pin, 'bookings', row, 'Booking deleted'); break;
@@ -309,6 +319,7 @@ export default {
         case 'listAttachments':   out = await listAttachments(env, row); break;
         case 'deleteAttachment':  out = await deleteAttachment(env, Number(p.id)); break;
         case 'deleteMessageImage': out = await deleteMessageImage(env, me, Number(p.id)); break;
+        case 'deletePropertyPhoto': out = await deletePropertyPhoto(env, me, Number(p.id)); break;
         case 'sweepIds':          out = await sweepExpiredIds(env); break;
         default: bad('Unknown action: ' + p.action);
       }
@@ -1435,7 +1446,7 @@ async function logBlock(env, table, headers, cols) {
     }))
   };
 }
-async function getLogs(env, pin) {
+async function getLogs(env, pin, origin = '') {
   return {
     bookings: await logBlock(env, 'bookings', BOOKING_HEADERS, BOOKING_COLS),
     expenses: await logBlock(env, 'expenses', EXPENSE_HEADERS, EXPENSE_COLS),
@@ -1457,7 +1468,8 @@ async function getLogs(env, pin) {
     checklist: await checklistData(env),
     /* Message library, unit facts and sends, for the booking page's Messages tab. */
     /* Guarded: a missing table must never take the whole logs call down. */
-    messages: await messagesData(env).catch(() => undefined)
+    messages: await messagesData(env).catch(() => undefined),
+    photos: await photosData(env, origin).catch(() => undefined)
   };
 }
 
@@ -1669,6 +1681,7 @@ async function deleteProperty(env, pin, d) {
           + (SELECT COUNT(*) FROM inv_items WHERE property IN (?1, ?2)) AS n`
   ).bind(prop.id, prop.name).first();
   if (used && used.n) bad(`"${prop.name}" is used by ${used.n} booking/expense/inventory record${used.n === 1 ? '' : 's'} — set it Inactive instead`);
+  await deletePropertyPhotos(env, id);
   await env.DB.prepare('DELETE FROM properties WHERE id = ?').bind(id).run();
   return { ok: true, message: `Property "${prop.name}" deleted`, properties: await readProperties(env) };
 }

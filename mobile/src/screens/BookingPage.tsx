@@ -165,11 +165,17 @@ function PageBody({ row, onClose }: { row: number; onClose: () => void }) {
           <TouchableOpacity onPress={onClose} style={st.round} activeOpacity={0.7} accessibilityLabel="Back" hitSlop={8}>
             <Text style={st.roundTxt}>‹</Text>
           </TouchableOpacity>
-          {canChange ? (
-            <TouchableOpacity onPress={edit} style={st.editPill} activeOpacity={0.75} accessibilityRole="button">
-              <Text style={st.editPillTxt}>{s.needsApproval ? 'Request change' : 'Edit'}</Text>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            {/* The unit's photo album — for "can you send pictures?" mid-chat. */}
+            <TouchableOpacity onPress={() => s.openGallery(stayProp)} style={st.editPill} activeOpacity={0.75} accessibilityRole="button">
+              <Text style={st.editPillTxt}>Photos</Text>
             </TouchableOpacity>
-          ) : null}
+            {canChange ? (
+              <TouchableOpacity onPress={edit} style={st.editPill} activeOpacity={0.75} accessibilityRole="button">
+                <Text style={st.editPillTxt}>{s.needsApproval ? 'Request change' : 'Edit'}</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
         </View>
         <View style={st.bannerFoot}>
           <View style={[st.phase, { backgroundColor: tone.bg }]}>

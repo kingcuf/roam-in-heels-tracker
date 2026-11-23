@@ -28,6 +28,7 @@ import Inventory from './src/screens/Inventory';
 import IdSheet from './src/screens/IdSheet';
 import BookingPage from './src/screens/BookingPage';
 import MessageLibrary from './src/screens/MessageLibrary';
+import UnitGallery from './src/screens/UnitGallery';
 import TeamScreen from './src/screens/TeamScreen';
 import IntroFilm from './src/intro/IntroFilm';
 import { markIntroPlayed, shouldPlayIntro } from './src/intro/policy';
@@ -149,6 +150,14 @@ function AddContainer() {
         <ScrollView contentContainerStyle={{ padding: 14, gap: 10, paddingBottom: 120 }}>
           <Text style={st.hubH}>Setup</Text>
           <Text style={st.hubSub}>The details every booking draws on. Changed now and then, not every day.</Text>
+          <TouchableOpacity style={st.hubCard} activeOpacity={0.8} onPress={() => s.openGallery('')}>
+            <View style={st.hubIcon}><Text style={st.hubIconT}>▦</Text></View>
+            <View style={{ flex: 1 }}>
+              <Text style={st.hubT}>Unit photos</Text>
+              <Text style={st.hubD}>Each unit’s album — send photos or a link on WhatsApp</Text>
+            </View>
+            <Text style={st.hubChev}>›</Text>
+          </TouchableOpacity>
           {setup.map((x) => (
             <TouchableOpacity key={x.key} style={st.hubCard} activeOpacity={0.8}
               onPress={() => { s.setAddSeg(x.key); setHub(false); }}>
@@ -245,6 +254,10 @@ function Root() {
               </Text>
             </View>
           </View>
+          {/* Unit photos, one tap from home: "send me pictures of 3028". */}
+          <TouchableOpacity style={st.photosBtn} onPress={() => s.openGallery('')} activeOpacity={0.7} accessibilityLabel="Unit photos">
+            <Text style={st.photosBtnT}>Photos</Text>
+          </TouchableOpacity>
           <TouchableOpacity style={st.refresh} onPress={() => s.refresh()} activeOpacity={0.7} accessibilityLabel="Refresh">
             <Text style={{ color: '#fff', fontFamily: F.bold, fontSize: 15 }}>↻</Text>
           </TouchableOpacity>
@@ -268,6 +281,7 @@ function Root() {
 
       {/* full-screen booking page, over the tabs and the tab bar */}
       <BookingPage />
+      <UnitGallery />
       {/* guest-ID upload, opened from the Action tab's IDs pending list */}
       <IdSheet />
       <Loader visible={s.busy} />
@@ -348,6 +362,8 @@ export default function App() {
 }
 
 const st = StyleSheet.create({
+  photosBtn: { borderRadius: 999, paddingVertical: 8, paddingHorizontal: 13, backgroundColor: 'rgba(255,255,255,0.85)', borderWidth: 1, borderColor: C.line, marginRight: 8 },
+  photosBtnT: { fontFamily: F.bold, fontSize: 12.5, color: C.ink },
   setupBack: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 2 },
   hubH: { fontFamily: F.xbold, fontSize: 22, color: C.ink, letterSpacing: -0.5, marginTop: 4 },
   hubSub: { fontFamily: F.med, fontSize: 13, color: C.bark, lineHeight: 19, marginBottom: 4 },

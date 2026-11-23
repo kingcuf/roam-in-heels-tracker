@@ -2,7 +2,9 @@
 // These run over the raw getLogs() blocks, exactly like the website does.
 
 export type LogBlock = { headers: string[]; rows: { r: number; cells: any[] }[] };
-export type Logs = { bookings: LogBlock; expenses: LogBlock; savings?: LogBlock; tasks?: LogBlock; enquiries?: LogBlock; checklist?: ChecklistData; messages?: MessagesData };
+export type Logs = { bookings: LogBlock; expenses: LogBlock; savings?: LogBlock; tasks?: LogBlock; enquiries?: LogBlock; checklist?: ChecklistData; messages?: MessagesData; photos?: UnitAlbum[] };
+/* A unit's photo album: photos stream via getAttachment; `album` is the public page for guests. */
+export type UnitAlbum = { property: string; album: string; photos: { id: number; type: string; name: string }[] };
 
 export const CI_MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 

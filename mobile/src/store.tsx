@@ -187,6 +187,11 @@ type StoreT = {
   bookingPage: { row: number; onBack?: () => void } | null;
   openBooking: (row: number, onBack?: () => void) => void;
   closeBooking: () => void;
+  /* The full-screen unit photo album (src/screens/UnitGallery); the value is
+     the property name, '' = pick a unit first. null = closed. */
+  gallery: string | null;
+  openGallery: (property: string) => void;
+  closeGallery: () => void;
   /* Inventory lives here rather than inside the Inventory screen so the Action
      tab's low-stock section reads the same data the Inventory tab shows. */
   inv: InvData | null;
@@ -253,6 +258,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [idDocs, setIdDocs] = useState<IdDocMap | null>(null);
   const [idTarget, setIdTarget] = useState<IdItem | null>(null);
   const [bookingPage, setBookingPage] = useState<StoreT['bookingPage']>(null);
+  const [gallery, setGallery] = useState<string | null>(null);
   const [inv, setInv] = useState<InvData | null>(null);
   const [invTarget, setInvTarget] = useState<string | null>(null);
   const pinRef = useRef('');
@@ -441,7 +447,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setApiUser(''); setMe(null); setRights([]); rightsRef.current = []; setNeedsApproval(false); setTickets(null);
     setDash(null); setLogs(null); setEditB(null); setEditE(null); setEditS(null); setEditP(null); setInvEdit(null);
     setNewDraft(null); setLastSubmit(null); setFocusTicket(null);
-    setIdMap(null); setIdTarget(null); setBookingPage(null); setInv(null); setInvTarget(null);
+    setIdMap(null); setIdTarget(null); setBookingPage(null); setGallery(null); setInv(null); setInvTarget(null);
     setTab('action'); setAddSeg('book'); setLogSeg('blog');
     authStore.deleteItemAsync(AUTH_KEY).catch(() => {});
     authStore.deleteItemAsync(PIN_KEY).catch(() => {});
@@ -504,6 +510,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     bookingPage,
     openBooking: (row, onBack) => setBookingPage({ row, onBack }),
     closeBooking: () => setBookingPage(null),
+    gallery, openGallery: (p) => setGallery(p), closeGallery: () => setGallery(null),
     inv, reloadInv, invTarget, setInvTarget,
   };
   return <Ctx.Provider value={store}>{children}</Ctx.Provider>;

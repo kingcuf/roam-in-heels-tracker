@@ -234,7 +234,30 @@ export const api = {
     return postForm(u, fd, 60000);
   },
   deleteMessageImage: (pin: string, id: number) => call('deleteMessageImage', { pin, id }),
+  /* Unit photo albums (Admin to change). Web photos are scaled to 1600 px JPEG
+     first: a phone camera original is 4–8 MB and the guest only needs a view. */
+  uploadPropertyPhoto: async (pin: string, property: string, file: { uri: string; name: string; mimeType: string }) => {
+    const fd = new FormData();
+    fd.append('property', property);
+    if (Platform.OS === 'web') fd.append('file', await fitJpeg(file.uri, 1600), (file.name || 'photo').replace(/\.[^.]+$/, '') + '.jpg');
+    else fd.append('file', { uri: file.uri, name: file.name, type: file.mimeType } as any);
+    const u = API_URL + '?action=uploadPropertyPhoto&pin=' + encodeURIComponent(pin) + userQs();
+    return postForm(u, fd, 90000);
+  },
+  deletePropertyPhoto: (pin: string, id: number) => call('deletePropertyPhoto', { pin, id }),
 };
+
+async function fitJpeg(uri: string, max: number): Promise<Blob> {
+  const img = new (globalThis as any).Image();
+  img.src = uri;
+  await img.decode();
+  const k = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+  const c = (globalThis as any).document.createElement('canvas');
+  c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+  return await new Promise<Blob>((ok, no) =>
+    c.toBlob((b: Blob | null) => (b ? ok(b) : no(new Error('Could not read that image.'))), 'image/jpeg', 0.85));
+}
 
 /* Web only: centre-crop to a 512px square JPEG. The native picker crops and
    compresses for us; a desktop browser hands over the original, which can be
