@@ -1098,6 +1098,7 @@ const CHECKLIST_PRESETS = {
   unit_details: { label: 'Unit details shared',          stage: 'before' },
   entry_pass:   { label: 'Entry passes created & sent',  stage: 'before' },
   campaign:     { label: 'Campaign message shared',      stage: 'stay' },
+  extend:       { label: 'Asked about extending the stay', stage: 'checkout' },
   review:       { label: 'Asked for review',             stage: 'checkout' },
 };
 const LINKED_PRESETS = new Set(['ids', 'review']);

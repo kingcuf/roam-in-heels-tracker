@@ -1413,6 +1413,7 @@ export const CHECKLIST_PRESETS: { key: string; label: string; stage: ChecklistSt
   { key: 'unit_details', label: 'Unit details shared', stage: 'before' },
   { key: 'entry_pass', label: 'Entry passes created & sent', stage: 'before' },
   { key: 'campaign', label: 'Campaign message shared', stage: 'stay' },
+  { key: 'extend', label: 'Asked about extending the stay', stage: 'checkout' },
   { key: 'review', label: 'Asked for review', stage: 'checkout', linked: 'Ticks itself when the review is marked requested.' },
 ];
 export type ChecklistItemRow = {
@@ -1462,13 +1463,13 @@ export function checklistFor(
     const t = ticks.get(it.id);
     let done = !!t, note = '', linked = '';
     if (it.preset === 'ids') {
-      linked = CHECKLIST_PRESETS[0].linked as string;
+      linked = (CHECKLIST_PRESETS.find((p) => p.key === 'ids')!.linked as string);
       const need = idSlotsOf(c), got = (have && have[String(o.r)]) || [];
       const n = need.filter((sl) => got.indexOf(sl) >= 0).length;
       done = n >= need.length;
       note = n + ' of ' + need.length + ' ID' + (need.length === 1 ? '' : 's') + ' uploaded';
     } else if (it.preset === 'review') {
-      linked = CHECKLIST_PRESETS[4].linked as string;
+      linked = (CHECKLIST_PRESETS.find((p) => p.key === 'review')!.linked as string);
       const rs = reviewStatusOf(c);
       done = rs !== 'pending';
       note = rs === 'pending' ? 'Not asked yet' : 'Review ' + rs;
