@@ -224,6 +224,16 @@ export const api = {
     const u = API_URL + '?action=uploadAttachment&pin=' + encodeURIComponent(pin) + userQs();
     return postForm(u, fd, 60000);   // uploads need longer than reads
   },
+  /* Photos on a library message (Admin). Streamed back through attachmentUrl. */
+  uploadMessageImage: async (pin: string, id: number, file: { uri: string; name: string; mimeType: string }) => {
+    const fd = new FormData();
+    fd.append('id', String(id));
+    if (Platform.OS === 'web') fd.append('file', await (await fetch(file.uri)).blob(), file.name);
+    else fd.append('file', { uri: file.uri, name: file.name, type: file.mimeType } as any);
+    const u = API_URL + '?action=uploadMessageImage&pin=' + encodeURIComponent(pin) + userQs();
+    return postForm(u, fd, 60000);
+  },
+  deleteMessageImage: (pin: string, id: number) => call('deleteMessageImage', { pin, id }),
 };
 
 /* Web only: centre-crop to a 512px square JPEG. The native picker crops and

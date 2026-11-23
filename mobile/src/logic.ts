@@ -1542,7 +1542,10 @@ export const MESSAGE_STAGES: { key: MessageStage; label: string }[] = [
 export type MessageTemplate = {
   id: number; title: string; body: string; stage: MessageStage; audience: MessageAudience;
   properties: string[]; preset: string; sort: number; updated_at?: string; updated_by?: string;
+  /* Photos sent along with the text (served by getAttachment). */
+  images?: MessageImage[];
 };
+export type MessageImage = { id: number; type: string; name: string };
 export type PropertyFact = { property: string; key: string; label: string; value: string };
 export type MessageSend = { booking_row: number; template_id: number; recipient: string; sent_by: string; sent_at: string };
 export type MessagesData = { templates: MessageTemplate[]; facts: PropertyFact[]; sends: MessageSend[] };

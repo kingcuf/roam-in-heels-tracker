@@ -207,3 +207,60 @@ export async function deleteBookingAttachments(env, bookingId) {
   ).bind(bookingId).run();
   return results.length;
 }
+
+/* ── Message photos ─────────────────────────────────────────────────────────
+   Pictures that go out with a library message (the building gate, the parking
+   slot, the Wi-Fi card). Same table and bucket as ID documents, told apart by
+   entity_type 'message' + kind 'msg_image', so the ID retention sweep (which
+   is scoped to entity_type 'booking') never touches them. Admin only to change;
+   anyone signed in streams them through getAttachment like any other file. */
+const MSG_MAX = 6;
+const MSG_MAX_BYTES = 8 * 1024 * 1024;
+const MSG_ALLOWED = /^image\/(jpeg|png|webp|heic|heif)$/i;
+
+export async function messageImages(env) {
+  const { results } = await env.DB.prepare(
+    `SELECT id, entity_id, filename, content_type FROM attachments
+      WHERE entity_type = 'message' AND kind = 'msg_image' ORDER BY id`
+  ).all();
+  const map = {};
+  for (const r of results || []) (map[r.entity_id] = map[r.entity_id] || []).push({ id: r.id, type: r.content_type, name: r.filename });
+  return map;
+}
+
+export async function uploadMessageImage(env, me, templateId, file) {
+  if (!me.isAdmin) fail('Only an Admin can change the message library');
+  if (!templateId) fail('Save the message first, then add photos');
+  if (!file || typeof file.arrayBuffer !== 'function') fail('No file received');
+  if (!env.FILES) fail('File storage is not configured');
+  const t = await env.DB.prepare(`SELECT id FROM message_templates WHERE id = ? AND removed_at = ''`).bind(templateId).first();
+  if (!t) fail('Message not found');
+  const n = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM attachments WHERE entity_type = 'message' AND entity_id = ? AND kind = 'msg_image'`
+  ).bind(templateId).first();
+  if ((n && n.n) >= MSG_MAX) fail(`A message can carry at most ${MSG_MAX} photos`);
+  const type = String(file.type || '');
+  if (!MSG_ALLOWED.test(type)) fail('Only photos (JPEG, PNG, WebP, HEIC) can be attached');
+  const buf = await file.arrayBuffer();
+  if (!buf.byteLength) fail('File is empty');
+  if (buf.byteLength > MSG_MAX_BYTES) fail('Photo is too large (max 8 MB)');
+  const safe = String(file.name || 'photo').replace(/[^A-Za-z0-9._-]/g, '_').slice(-60);
+  const key = `messages/${templateId}/${Date.now()}-${safe}`;
+  await env.FILES.put(key, buf, { httpMetadata: { contentType: type } });
+  await env.DB.prepare(
+    `INSERT INTO attachments (entity_type, entity_id, kind, slot, r2_key, filename, content_type, size_bytes, uploaded_at)
+     VALUES ('message', ?, 'msg_image', '', ?, ?, ?, ?, ?)`
+  ).bind(templateId, key, String(file.name || ''), type, buf.byteLength, todayISO()).run();
+  return { ok: true, message: 'Photo added' };
+}
+
+export async function deleteMessageImage(env, me, id) {
+  if (!me.isAdmin) fail('Only an Admin can change the message library');
+  const row = await env.DB.prepare(
+    `SELECT r2_key FROM attachments WHERE id = ? AND entity_type = 'message' AND kind = 'msg_image'`
+  ).bind(id).first();
+  if (!row) fail('Photo not found');
+  if (env.FILES) { try { await env.FILES.delete(row.r2_key); } catch {} }
+  await env.DB.prepare('DELETE FROM attachments WHERE id = ?').bind(id).run();
+  return { ok: true, message: 'Photo removed' };
+}

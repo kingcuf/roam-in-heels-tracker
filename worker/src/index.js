@@ -21,7 +21,7 @@
 import { runMirror } from './mirror.js';
 import { clientIp, throttleCheck, recordFail, clearFails } from './throttle.js';
 import { uploadAvatar, deleteAvatar, getAvatar, avatarAt, avatarMap } from './avatars.js';
-import { idStatus, idDocs, listAttachments, uploadAttachment, getAttachment, deleteAttachment, sweepExpiredIds, AttachError, deleteBookingAttachments } from './attachments.js';
+import { idStatus, idDocs, listAttachments, uploadAttachment, getAttachment, deleteAttachment, sweepExpiredIds, AttachError, deleteBookingAttachments, messageImages, uploadMessageImage, deleteMessageImage } from './attachments.js';
 import { authenticate, whoAmI, ACTION_RIGHTS, OPEN_ACTIONS, rightLabel, listUsers, addUser, updateUser, changePin, setRoleRights } from './auth.js';
 import { raiseTicket, listTickets, approveTicket, rejectTicket, withdrawTicket, approverName } from './tickets.js';
 
@@ -217,6 +217,10 @@ export default {
         );
         return reply(p, out);
       }
+      if (request.method === 'POST' && p.action === 'uploadMessageImage') {
+        const form = await request.formData();
+        return reply(p, await uploadMessageImage(env, me, Number(form.get('id') || p.id), form.get('file')));
+      }
       if (request.method === 'POST' && p.action === 'uploadAvatar') {
         const form = await request.formData();
         return reply(p, await uploadAvatar(env, me, form.get('file')));
@@ -304,6 +308,7 @@ export default {
         case 'idDocs':            out = await idDocs(env); break;
         case 'listAttachments':   out = await listAttachments(env, row); break;
         case 'deleteAttachment':  out = await deleteAttachment(env, Number(p.id)); break;
+        case 'deleteMessageImage': out = await deleteMessageImage(env, me, Number(p.id)); break;
         case 'sweepIds':          out = await sweepExpiredIds(env); break;
         default: bad('Unknown action: ' + p.action);
       }
@@ -1243,6 +1248,8 @@ async function messagesData(env) {
     try { props = JSON.parse(x.properties || '[]'); } catch (e) { props = []; }
     return { ...x, properties: Array.isArray(props) ? props : [] };
   });
+  const imgs = await messageImages(env).catch(() => ({}));
+  for (const x of templates) x.images = imgs[x.id] || [];
   return { templates, facts: f.results || [], sends: sends.results || [] };
 }
 

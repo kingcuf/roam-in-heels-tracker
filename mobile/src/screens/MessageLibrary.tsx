@@ -8,7 +8,7 @@ import {
   CHECKLIST_PRESETS, LINKABLE_PRESETS, MESSAGE_STAGES, MESSAGE_VARS, MessageAudience, MessageStage, MessageTemplate,
   STARTER_MESSAGES, UNIT_FACTS, ciParse, factsOf, messageValues, renderMessage, stayPropOf, varLabel,
 } from '../logic';
-import { stageName, st as ms } from '../messages';
+import { MessagePhotosEditor, StagedPhoto, stageName, st as ms } from '../messages';
 
 /* ── Add → Messages: the message library (Admin) ────────────────────────────
    The list reads as the guest journey (before check-in → check-out), since
@@ -95,6 +95,7 @@ function Row({ t, onPress }: { t: MessageTemplate; onPress: () => void }) {
         {t.audience === 'host' ? <Text style={[ms.tag, ms.tagHost]}>FOR HOST</Text> : <Text style={ms.tag}>FOR GUEST</Text>}
         <Text style={ms.tag}>{t.properties.length ? t.properties.map(unitShort).join(' · ').toUpperCase() : 'ALL UNITS'}</Text>
         {linked ? <Text style={[ms.tag, ms.tagDue]}>{'TICKS: ' + linked.label.toUpperCase()}</Text> : null}
+        {t.images?.length ? <Text style={ms.tag}>{t.images.length + ' PHOTO' + (t.images.length === 1 ? '' : 'S')}</Text> : null}
       </View>
       <Text style={ms.title}>{t.title}</Text>
       <Text style={st.snip} numberOfLines={2}>{t.body}</Text>
@@ -109,6 +110,9 @@ function Editor({ draft: d0, onClose }: { draft: Draft; onClose: () => void }) {
   const toast = useToast();
   const [d, setD] = useState<Draft>(d0);
   const [busy, setBusy] = useState(false);
+  const [added, setAdded] = useState<StagedPhoto[]>([]);
+  const [removed, setRemoved] = useState<number[]>([]);
+  const existing = (s.logs?.messages?.templates || []).find((t) => t.id === d0.id)?.images || [];
   const sel = useRef({ start: d0.body.length, end: d0.body.length });
   const set = (p: Partial<Draft>) => setD((x) => ({ ...x, ...p }));
   const props = s.props.filter((p) => (p.status || 'Active') !== 'Inactive').map((p) => p.name);
@@ -149,9 +153,14 @@ function Editor({ draft: d0, onClose }: { draft: Draft; onClose: () => void }) {
     if (!d.body.trim()) { toast('The message is empty', false); return; }
     setBusy(true);
     try {
-      await api.saveTemplate(s.pin, { ...d, title: d.title.trim() });
+      const r = await api.saveTemplate(s.pin, { ...d, title: d.title.trim() });
+      const id = d.id || r.id;
+      /* Photos after the text: a new message needs its id first. */
+      let failed = 0;
+      for (const pid of removed) { try { await api.deleteMessageImage(s.pin, pid); } catch { failed++; } }
+      for (const f of added) { try { await api.uploadMessageImage(s.pin, id, f); } catch { failed++; } }
       await s.reloadLogs();
-      toast('Message saved', true);
+      toast(failed ? 'Message saved, but ' + failed + ' photo change' + (failed === 1 ? '' : 's') + ' failed' : 'Message saved', !failed);
       onClose();
     } catch (e: any) { toast(String(e?.message || e), false); }
     finally { setBusy(false); }
@@ -222,6 +231,16 @@ function Editor({ draft: d0, onClose }: { draft: Draft; onClose: () => void }) {
             </View>
           </View>
         ))}
+      </View>
+
+      <View style={[ms.card, { gap: 6 }]}>
+        <Text style={st.lbl}>Photos</Text>
+        <MessagePhotosEditor
+          existing={existing} removed={removed} added={added}
+          onRemoveExisting={(id) => setRemoved((x) => [...x, id])}
+          onAdd={(p) => setAdded((x) => [...x, ...p])}
+          onRemoveAdded={(i) => setAdded((x) => x.filter((_, j) => j !== i))}
+        />
       </View>
 
       <View style={[ms.card, { gap: 6 }]}>

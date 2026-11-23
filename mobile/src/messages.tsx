@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Linking, Platform, Share, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Image, Linking, Platform, ScrollView, Share, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { C, F } from './theme';
 import { useStore } from './store';
 import { api } from './api';
 import { Btn, useToast } from './ui';
 import {
-  CHECKLIST_PRESETS, FACT_KEY_RE, MESSAGE_STAGES, MessageTemplate, UNIT_FACTS, factKeyOf, factsOf,
+  CHECKLIST_PRESETS, FACT_KEY_RE, MESSAGE_STAGES, MessageImage, MessageTemplate, UNIT_FACTS, factKeyOf, factsOf,
   messageValues, messagesFor, renderMessage, stayPropOf, varLabel, waLink,
 } from './logic';
 
@@ -81,6 +82,32 @@ function MessageCard({ t, row, values, facts, prop, guestPhone, dueNow, open, on
      detail is added to the unit, or the text is edited for this send. */
   const blocked = /\{[a-z][a-z0-9_]*\}/.test(out);
 
+  const images = t.images || [];
+  const files = usePhotoFiles(open ? images : [], s.pin);
+  const canShareFiles = Platform.OS === 'web' && !!files && !!(navigator as any)?.canShare?.({ files });
+  /* WhatsApp's click-to-chat link carries text only. Photos go through the
+     phone's share sheet (pick the same chat), or are saved on a computer so
+     they can be dropped into WhatsApp Web. */
+  const sharePhotos = async () => {
+    if (!images.length) return;
+    if (Platform.OS === 'web') {
+      if (!files) { toast('Photos are still loading — try again in a moment', false); return; }
+      if (canShareFiles) {
+        try { await (navigator as any).share({ files }); } catch { /* dismissed */ }
+        return;
+      }
+      for (const f of files) {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(f); a.download = f.name;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+      }
+      toast(files.length + ' photo' + (files.length === 1 ? '' : 's') + ' saved — drag them into the WhatsApp chat', true);
+      return;
+    }
+    for (const im of images) await Linking.openURL(api.attachmentUrl(s.pin, im.id)).catch(() => {});
+  };
+
   const sends = (s.logs?.messages?.sends || []).filter((x) => x.booking_row === row && x.template_id === t.id);
   const last = sends[sends.length - 1];
   const linked = t.preset ? CHECKLIST_PRESETS.find((p) => p.key === t.preset) : null;
@@ -152,6 +179,27 @@ function MessageCard({ t, row, values, facts, prop, guestPhone, dueNow, open, on
           ) : (
             <View style={st.bubble}><Text style={st.bubbleTxt} selectable>{out}</Text></View>
           )}
+          {images.length ? (
+            <View style={st.photos}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                {images.map((im) => (
+                  <TouchableOpacity key={im.id} activeOpacity={0.85}
+                    onPress={() => Linking.openURL(api.attachmentUrl(s.pin, im.id)).catch(() => {})}>
+                    <Image source={{ uri: api.attachmentUrl(s.pin, im.id) }} style={st.thumb} />
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+              <View style={st.photoRow}>
+                <Text style={st.photoNote}>
+                  {Platform.OS === 'web' && !canShareFiles
+                    ? 'WhatsApp links carry text only. Send the text, then save the photos and drop them into the chat.'
+                    : 'WhatsApp links carry text only. Send the text, then share the photos and pick the same chat.'}
+                </Text>
+                <Btn kind="mini" title={(Platform.OS === 'web' && !canShareFiles ? 'Save ' : 'Share ') + images.length + ' photo' + (images.length === 1 ? '' : 's')}
+                  onPress={sharePhotos} disabled={Platform.OS === 'web' && !files} />
+              </View>
+            </View>
+          ) : null}
           <View style={st.minorRow}>
             <TouchableOpacity onPress={() => setDraft(draft === null ? text : null)} hitSlop={6}>
               <Text style={st.link}>{draft === null ? 'Edit for this send' : 'Undo my edits'}</Text>
@@ -201,6 +249,80 @@ function MessageCard({ t, row, values, facts, prop, guestPhone, dueNow, open, on
 
 /* ══ on the property (Admin) ══ */
 type FactRow = { key: string; label: string; value: string; custom?: boolean };
+/* Web: fetch a message's photos as Files once the card opens, so the share
+   sheet can be called straight from the tap (browsers refuse navigator.share
+   after a slow await). null while loading. */
+function usePhotoFiles(images: MessageImage[], pin: string): File[] | null {
+  const [files, setFiles] = useState<File[] | null>(null);
+  const key = images.map((i) => i.id).join(',');
+  useEffect(() => {
+    if (Platform.OS !== 'web' || !key) { setFiles(null); return; }
+    let live = true;
+    setFiles(null);
+    Promise.all(images.map(async (im, i) => {
+      const b = await (await fetch(api.attachmentUrl(pin, im.id))).blob();
+      const ext = (b.type.split('/')[1] || 'jpg').replace('jpeg', 'jpg');
+      return new File([b], (im.name || 'photo-' + (i + 1)).replace(/\.[^.]+$/, '') + '.' + ext, { type: b.type || im.type });
+    })).then((fs) => { if (live) setFiles(fs); }).catch(() => { if (live) setFiles([]); });
+    return () => { live = false; };
+  }, [key, pin]);
+  return files;
+}
+
+/* ══ Admin: photos on a library message ══
+   Staged until the message is saved, like every other field in the editor. */
+export type StagedPhoto = { uri: string; name: string; mimeType: string };
+export const MAX_MESSAGE_PHOTOS = 6;
+export function MessagePhotosEditor({ existing, removed, added, onRemoveExisting, onAdd, onRemoveAdded }: {
+  existing: MessageImage[]; removed: number[]; added: StagedPhoto[];
+  onRemoveExisting: (id: number) => void; onAdd: (p: StagedPhoto[]) => void; onRemoveAdded: (i: number) => void;
+}) {
+  const s = useStore();
+  const toast = useToast();
+  const kept = existing.filter((x) => removed.indexOf(x.id) < 0);
+  const room = MAX_MESSAGE_PHOTOS - kept.length - added.length;
+  const pick = async () => {
+    if (Platform.OS !== 'web') {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) { toast('Photo access is needed to pick an image', false); return; }
+    }
+    const r = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.75, allowsMultipleSelection: true, selectionLimit: room });
+    if (r.canceled || !r.assets?.length) return;
+    const list = r.assets.slice(0, room).map((a, i) => ({ uri: a.uri, name: a.fileName || 'photo-' + (i + 1) + '.jpg', mimeType: a.mimeType || 'image/jpeg' }));
+    if (r.assets.length > room) toast('Only ' + MAX_MESSAGE_PHOTOS + ' photos per message', false);
+    onAdd(list);
+  };
+  return (
+    <View style={{ gap: 8 }}>
+      <View style={st.chipsWrap}>
+        {kept.map((im) => (
+          <View key={'e' + im.id}>
+            <Image source={{ uri: api.attachmentUrl(s.pin, im.id) }} style={st.thumb} />
+            <TouchableOpacity style={st.thumbX} onPress={() => onRemoveExisting(im.id)} hitSlop={6} accessibilityLabel="Remove photo">
+              <Text style={st.thumbXT}>×</Text>
+            </TouchableOpacity>
+          </View>
+        ))}
+        {added.map((p, i) => (
+          <View key={'a' + i}>
+            <Image source={{ uri: p.uri }} style={st.thumb} />
+            <TouchableOpacity style={st.thumbX} onPress={() => onRemoveAdded(i)} hitSlop={6} accessibilityLabel="Remove photo">
+              <Text style={st.thumbXT}>×</Text>
+            </TouchableOpacity>
+          </View>
+        ))}
+        {room > 0 ? (
+          <TouchableOpacity style={[st.thumb, st.thumbAdd]} onPress={pick} activeOpacity={0.7} accessibilityLabel="Add photo">
+            <Text style={st.thumbAddT}>+</Text>
+            <Text style={st.thumbAddS}>Photo</Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
+      <Text style={st.photoNote}>{'Up to ' + MAX_MESSAGE_PHOTOS + ' photos, e.g. the building gate, parking or Wi-Fi card. They go out with the message.'}</Text>
+    </View>
+  );
+}
+
 export function UnitFactsEditor({ property }: { property: string }) {
   const s = useStore();
   const toast = useToast();
@@ -291,6 +413,16 @@ export const st = StyleSheet.create({
   warn: { backgroundColor: C.redbg, borderRadius: 12, padding: 10, marginTop: 12 },
   warnT: { fontFamily: F.bold, fontSize: 12.5, color: C.red },
   warnS: { fontFamily: F.med, fontSize: 12, color: C.red, marginTop: 2, opacity: 0.85 },
+  photos: { marginTop: 10, gap: 8 },
+  photoRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  photoNote: { flex: 1, fontFamily: F.med, fontSize: 11.5, color: C.muted, lineHeight: 16 },
+  thumb: { width: 76, height: 76, borderRadius: 10, backgroundColor: C.line },
+  thumbX: { position: 'absolute', top: -6, right: -6, width: 22, height: 22, borderRadius: 11, backgroundColor: C.ink, alignItems: 'center', justifyContent: 'center' },
+  thumbXT: { color: '#fff', fontSize: 15, lineHeight: 17, fontFamily: F.bold },
+  thumbAdd: { borderWidth: 1.5, borderStyle: 'dashed', borderColor: C.line, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' },
+  thumbAddT: { fontFamily: F.bold, fontSize: 22, color: C.blue2, lineHeight: 24 },
+  thumbAddS: { fontFamily: F.semi, fontSize: 11, color: C.blue2 },
+  chipsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, paddingTop: 6 },
   bubble: { backgroundColor: '#E7F6DF', borderRadius: 14, borderTopLeftRadius: 4, padding: 12, marginTop: 12 },
   bubbleEdit: { minHeight: 160, fontFamily: F.med, fontSize: 14, color: C.ink, lineHeight: 20, borderWidth: 1, borderColor: C.line, backgroundColor: '#fff' },
   bubbleTxt: { fontFamily: F.med, fontSize: 14, color: '#1B2B1B', lineHeight: 20 },

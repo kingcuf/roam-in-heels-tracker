@@ -92,7 +92,7 @@ export const OPEN_ACTIONS = new Set([
   /* Admin-only, checked in the handlers (as property checklist steps are). */
   'saveTemplate', 'removeTemplate', 'setPropertyFacts',
   /* Sending a message is open to whoever can see the booking (the logs). */
-  'logMessageSend',
+  'logMessageSend', 'uploadMessageImage', 'deleteMessageImage',
 ]);
 
 export const rightLabel = (key) => {
