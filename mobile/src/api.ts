@@ -245,6 +245,15 @@ export const api = {
     return postForm(u, fd, 90000);
   },
   deletePropertyPhoto: (pin: string, id: number) => call('deletePropertyPhoto', { pin, id }),
+  /* Hosts & ledger (Admin). Deals ride on addBooking/updateBooking as payload.hostDeal. */
+  saveHost: (pin: string, d: { id?: number; name: string; phone: string; notes: string }) =>
+    call('saveHost', { pin, payload: d }) as Promise<{ ok: boolean; message: string; id: number }>,
+  removeHost: (pin: string, id: number) => call('removeHost', { pin, payload: { id } }),
+  saveHostUnit: (pin: string, d: any) => call('saveHostUnit', { pin, payload: d }) as Promise<{ ok: boolean; message: string; id: number }>,
+  removeHostUnit: (pin: string, id: number) => call('removeHostUnit', { pin, payload: { id } }),
+  addHostPayment: (pin: string, d: { hostId: number; amount: number; direction: 'paid' | 'received'; date: string; mode: string; note: string }) =>
+    call('addHostPayment', { pin, payload: d }),
+  removeHostPayment: (pin: string, id: number) => call('removeHostPayment', { pin, payload: { id } }),
 };
 
 async function fitJpeg(uri: string, max: number): Promise<Blob> {

@@ -10,7 +10,7 @@ import { useToast } from './ui';
 // directly beneath the form; Team holds change requests, users and rights.
 // Which of these a user sees depends on their role's rights.
 export type Tab = 'action' | 'cal' | 'dash' | 'add' | 'team';
-export type AddSeg = 'book' | 'exp' | 'sav' | 'prop' | 'inv' | 'msg';
+export type AddSeg = 'book' | 'exp' | 'sav' | 'prop' | 'inv' | 'msg' | 'host';
 // Retained: identifies which log a pending edit came from, and which log block
 // an embedded LogsScreen should render.
 export type LogSeg = 'blog' | 'elog' | 'slog' | 'prop';
@@ -90,7 +90,7 @@ const REPORT_PARTS: LoadParts = { dash: true, logs: false, inv: false, tickets: 
 
 /* Tab → the right that shows it. Add and Team are decided by rights().*/
 const TAB_RIGHT: Partial<Record<Tab, string>> = { action: 'action.view', cal: 'calendar.view', dash: 'reports.view' };
-export const SEG_ENTITY: Record<AddSeg, string> = { book: 'booking', exp: 'expense', sav: 'saving', prop: 'property', inv: 'inventory', msg: 'messages' };
+export const SEG_ENTITY: Record<AddSeg, string> = { book: 'booking', exp: 'expense', sav: 'saving', prop: 'property', inv: 'inventory', msg: 'messages', host: 'booking' };
 
 type StoreT = {
   pin: string;
@@ -190,6 +190,11 @@ type StoreT = {
   /* The full-screen unit photo album (src/screens/UnitGallery); the value is
      the property name, '' = pick a unit first. null = closed. */
   gallery: string | null;
+  /* Setup → Hosts: which host profile is open (null = the list, -1 = new host). */
+  hostFocus: number | null;
+  setHostFocus: (id: number | null) => void;
+  /* From anywhere (booking page): jump to a host's profile. */
+  openHost: (id: number) => void;
   openGallery: (property: string) => void;
   closeGallery: () => void;
   /* Inventory lives here rather than inside the Inventory screen so the Action
@@ -259,6 +264,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [idTarget, setIdTarget] = useState<IdItem | null>(null);
   const [bookingPage, setBookingPage] = useState<StoreT['bookingPage']>(null);
   const [gallery, setGallery] = useState<string | null>(null);
+  const [hostFocus, setHostFocus] = useState<number | null>(null);
   const [inv, setInv] = useState<InvData | null>(null);
   const [invTarget, setInvTarget] = useState<string | null>(null);
   const pinRef = useRef('');
@@ -281,8 +287,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const canAny = (entity: string) => ['add', 'update', 'delete'].some((op) => can(entity + '.' + op));
   /* Messages is the message library — written by Admins only (sending
      happens on the booking page, for anyone who can see bookings). */
-  const addSegs = (['book', 'exp', 'sav', 'prop', 'inv', 'msg'] as AddSeg[]).filter((sg) =>
-    sg === 'msg' ? me?.role === 'Admin' : canAny(SEG_ENTITY[sg]));
+  /* Hosts: anyone who works bookings can see the ledger; changing it is Admin (server-checked). */
+  const addSegs = (['book', 'exp', 'sav', 'prop', 'inv', 'msg', 'host'] as AddSeg[]).filter((sg) =>
+    sg === 'msg' ? me?.role === 'Admin' : sg === 'host' ? me?.role === 'Admin' || canAny('booking') : canAny(SEG_ENTITY[sg]));
   const tabs = (['action', 'cal', 'dash', 'add', 'team'] as Tab[]).filter((t) =>
     t === 'add' ? addSegs.length > 0 : t === 'team' ? true : can(TAB_RIGHT[t]!));
 
@@ -511,6 +518,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     openBooking: (row, onBack) => setBookingPage({ row, onBack }),
     closeBooking: () => setBookingPage(null),
     gallery, openGallery: (p) => setGallery(p), closeGallery: () => setGallery(null),
+    hostFocus, setHostFocus,
+    openHost: (id) => { setBookingPage(null); setGallery(null); setHostFocus(id); setAddSeg('host'); setTab('add'); },
     inv, reloadInv, invTarget, setInvTarget,
   };
   return <Ctx.Provider value={store}>{children}</Ctx.Provider>;

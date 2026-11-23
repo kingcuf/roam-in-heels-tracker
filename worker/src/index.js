@@ -19,6 +19,7 @@
  */
 
 import { runMirror } from './mirror.js';
+import { hostsData, saveHost, removeHost, saveHostUnit, removeHostUnit, checkHostDeal, writeHostDeal, deleteHostDeal, addHostPayment, removeHostPayment } from './hosts.js';
 import { photosData, uploadPropertyPhoto, deletePropertyPhoto, deletePropertyPhotos, albumPage, albumImage } from './photos.js';
 import { clientIp, throttleCheck, recordFail, clearFails } from './throttle.js';
 import { uploadAvatar, deleteAvatar, getAvatar, avatarAt, avatarMap } from './avatars.js';
@@ -320,6 +321,12 @@ export default {
         case 'deleteAttachment':  out = await deleteAttachment(env, Number(p.id)); break;
         case 'deleteMessageImage': out = await deleteMessageImage(env, me, Number(p.id)); break;
         case 'deletePropertyPhoto': out = await deletePropertyPhoto(env, me, Number(p.id)); break;
+        case 'saveHost':          out = await saveHost(env, me, payload); break;
+        case 'removeHost':        out = await removeHost(env, me, payload); break;
+        case 'saveHostUnit':      out = await saveHostUnit(env, me, payload); break;
+        case 'removeHostUnit':    out = await removeHostUnit(env, me, payload); break;
+        case 'addHostPayment':    out = await addHostPayment(env, me, payload); break;
+        case 'removeHostPayment': out = await removeHostPayment(env, me, payload); break;
         case 'sweepIds':          out = await sweepExpiredIds(env); break;
         default: bad('Unknown action: ' + p.action);
       }
@@ -819,6 +826,7 @@ async function addBooking(env, pin, d) {
   Object.assign(f, await splitFor(env, f));
   f.booking_id = await nextBookingId(env);
   const extra = checklistExtraOf(d);   // validated before the insert, so a bad step cannot half-save a booking
+  const deal = await checkHostDeal(env, d.hostDeal);
   const cols = Object.keys(f);
   const r = await env.DB.prepare(
     `INSERT INTO bookings (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`
@@ -826,6 +834,9 @@ async function addBooking(env, pin, d) {
   /* One-off checklist steps typed on the booking form. A manager's new booking
      carries them inside the approval request, so they land when it is approved. */
   if (extra.length) await insertBookingSteps(env, r.meta.last_row_id, extra, '');
+  /* The host deal rides in the payload like the steps above, so a manager's
+     booking carries it through approval. `me` is not passed down here. */
+  if (deal) await writeHostDeal(env, null, r.meta.last_row_id, deal);
   /* row lets the app attach guest IDs picked before the booking existed. */
   return { ok: true, message: `Booking ${f.booking_id} added`, row: r.meta.last_row_id, bookingId: f.booking_id };
 }
@@ -842,10 +853,12 @@ async function updateBooking(env, pin, row, d) {
      is exactly when the attribution has to move with it. */
   Object.assign(f, await splitFor(env, f));
   f.booking_id = d.bookingId || existing.booking_id;
+  const deal = await checkHostDeal(env, d.hostDeal);
   const cols = Object.keys(f);
   await env.DB.prepare(
     `UPDATE bookings SET ${cols.map(c => `${c} = ?`).join(', ')} WHERE id = ?`
   ).bind(...cols.map(c => f[c]), row).run();
+  await writeHostDeal(env, null, row, deal);
   return { ok: true, message: `Booking ${f.booking_id} updated` };
 }
 
@@ -928,6 +941,7 @@ async function deleteRowById(env, pin, table, row, message) {
      identity document with nothing left pointing at it. Data minimisation is
      the whole reason that sweep exists, so honour it here too. */
   if (table === 'bookings') await deleteBookingAttachments(env, row);
+  if (table === 'bookings') await deleteHostDeal(env, row);
   const res = await env.DB.prepare(`DELETE FROM ${table} WHERE id = ?`).bind(row).run();
   if (!res.meta.changes) bad('Row not found');
   /* Its one-off checklist steps and every tick go with it. Property-wide steps
@@ -1469,7 +1483,8 @@ async function getLogs(env, pin, origin = '') {
     /* Message library, unit facts and sends, for the booking page's Messages tab. */
     /* Guarded: a missing table must never take the whole logs call down. */
     messages: await messagesData(env).catch(() => undefined),
-    photos: await photosData(env, origin).catch(() => undefined)
+    photos: await photosData(env, origin).catch(() => undefined),
+    hosts: await hostsData(env).catch(() => undefined)
   };
 }
 

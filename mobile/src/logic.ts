@@ -2,7 +2,7 @@
 // These run over the raw getLogs() blocks, exactly like the website does.
 
 export type LogBlock = { headers: string[]; rows: { r: number; cells: any[] }[] };
-export type Logs = { bookings: LogBlock; expenses: LogBlock; savings?: LogBlock; tasks?: LogBlock; enquiries?: LogBlock; checklist?: ChecklistData; messages?: MessagesData; photos?: UnitAlbum[] };
+export type Logs = { bookings: LogBlock; expenses: LogBlock; savings?: LogBlock; tasks?: LogBlock; enquiries?: LogBlock; checklist?: ChecklistData; messages?: MessagesData; photos?: UnitAlbum[]; hosts?: HostsData };
 /* A unit's photo album: photos stream via getAttachment; `album` is the public page for guests. */
 export type UnitAlbum = { property: string; album: string; photos: { id: number; type: string; name: string }[] };
 
@@ -1600,7 +1600,7 @@ const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const fmtLong = (d: Date | null) => (d ? DOW[d.getDay()] + ', ' + ciFmtDay(d) : '');
 
 /* The values a booking supplies, unit facts underneath. Blank = not known. */
-export function messageValues(o: { r: number; cells: any[] }, facts: Record<string, string>): Record<string, string> {
+export function messageValues(o: { r: number; cells: any[] }, facts: Record<string, string>, hostUnit?: { unit: string; building: string } | null): Record<string, string> {
   const c = o.cells;
   const b = cardOf(o);
   const name = String(b.guest || '').trim();
@@ -1617,8 +1617,9 @@ export function messageValues(o: { r: number; cells: any[] }, facts: Record<stri
   put('checkout_time', b.outT);
   put('nights', b.nights ? String(b.nights) : '');
   put('booking_id', b.id);
-  put('unit', bannerUnitOf(c));
-  put('property', stayPropOf(c));
+  put('unit', hostUnit ? hostUnit.unit : bannerUnitOf(c));
+  /* Never our flat's name for a guest housed in a host's unit. */
+  put('property', hostUnit ? (hostUnit.building || 'Unit ' + hostUnit.unit) : stayPropOf(c));
   return v;
 }
 
@@ -1679,3 +1680,104 @@ export const STARTER_MESSAGES: Omit<MessageTemplate, 'id' | 'sort'>[] = [
   { title: 'New booking (for host)', stage: 'any', audience: 'host', properties: [], preset: '',
     body: 'New booking for {unit}: {guest_name} ({guests} guests)\n{checkin_date} {checkin_time} → {checkout_date} {checkout_time}\nBooking ID {booking_id} · Guest mobile {guest_phone}' },
 ];
+
+
+/* ══ Hosts & the host ledger ═════════════════════════════════════════════════
+   A host holds units; a deal ties one booking to a host (unit_id 0 = their
+   guest stayed in OUR flat); payments are money that actually moved. Balances
+   are derived here, never stored.
+   Per deal:  host collected → host owes us our net (cell 9)
+              we collected   → we owe the host their share (cell 10, "commission")
+   Sign convention everywhere: + = the host owes us, − = we owe the host. */
+export type Host = { id: number; name: string; phone: string; notes: string; updated_at?: string };
+export type HostUnit = {
+  id: number; host_id: number; unit: string; building: string; address: string; map_link: string;
+  wifi_name: string; wifi_password: string; checkin_time: string; checkout_time: string;
+  caretaker_name: string; caretaker_phone: string; notes: string;
+};
+export type HostDeal = { booking_row: number; host_id: number; unit_id: number; collected_by: 'host' | 'us'; settled: number; updated_by?: string; updated_at?: string };
+export type HostPayment = { id: number; host_id: number; txn_date: string; amount: number; direction: 'paid' | 'received'; mode: string; note: string; created_by?: string };
+export type HostsData = { hosts: Host[]; units: HostUnit[]; deals: HostDeal[]; payments: HostPayment[] };
+export type LedgerEntry = {
+  kind: 'deal' | 'payment'; date: string; amount: number; balance: number; label: string; sub: string;
+  row?: number; payment?: HostPayment; deal?: HostDeal; settled?: boolean;
+};
+
+/* Channels that pay out to us, so a host cannot have collected the guest's money. */
+export const OTA_CHANNELS = ['Airbnb', 'Booking.com', 'MMT', 'Agoda'];
+export const defaultCollector = (channel: string): 'host' | 'us' => (OTA_CHANNELS.indexOf(String(channel || '').trim()) >= 0 ? 'us' : 'host');
+
+const num0 = (x: any) => { const n = Number(x); return Number.isFinite(n) ? n : 0; };
+export const dealOf = (data: HostsData | undefined, row: number) => (data?.deals || []).find((d) => d.booking_row === row) || null;
+export const hostById = (data: HostsData | undefined, id: number) => (data?.hosts || []).find((h) => h.id === id) || null;
+export const unitById = (data: HostsData | undefined, id: number) => (data?.units || []).find((u) => u.id === id) || null;
+
+/* What one deal leaves owing. + = host owes us. Settled history counts 0. */
+export function dealAmount(deal: HostDeal, cells: any[]): number {
+  if (deal.settled) return 0;
+  return deal.collected_by === 'us' ? -Math.abs(num0(cells[10])) : num0(cells[9]);
+}
+
+export function hostLedger(hostId: number, data: HostsData | undefined, rows: { r: number; cells: any[] }[]) {
+  const byRow = new Map(rows.map((o) => [o.r, o]));
+  const raw: Omit<LedgerEntry, 'balance'>[] = [];
+  for (const d of data?.deals || []) {
+    if (d.host_id !== hostId) continue;
+    const o = byRow.get(d.booking_row);
+    if (!o) continue;
+    const c = o.cells;
+    const u = d.unit_id ? unitById(data, d.unit_id) : null;
+    const date = String(c[20] || c[0] || '').slice(0, 10);
+    const amt = dealAmount(d, c);
+    raw.push({
+      kind: 'deal', date, amount: amt, row: o.r, deal: d, settled: !!d.settled,
+      /* Pre-ledger history often has no unit recorded: say nothing rather than "in our flat". */
+      label: String(c[2] || 'Guest').trim() + (u ? ' · in their ' + u.unit : d.settled ? '' : ' · in our ' + (unitNumberOf(String(c[1] || '')) || c[1])),
+      sub: d.settled ? 'Before the ledger · settled'
+        : d.collected_by === 'us' ? 'We collected · their share ' + inrPlain(Math.abs(amt))
+        : 'They collected · our net ' + inrPlain(amt),
+    });
+  }
+  for (const p of data?.payments || []) {
+    if (p.host_id !== hostId) continue;
+    raw.push({
+      kind: 'payment', date: p.txn_date, payment: p,
+      amount: p.direction === 'paid' ? num0(p.amount) : -num0(p.amount),
+      label: p.direction === 'paid' ? 'We paid them' : 'They paid us',
+      sub: [p.mode, p.note].filter(Boolean).join(' · '),
+    });
+  }
+  raw.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.kind === b.kind ? 0 : a.kind === 'deal' ? -1 : 1));
+  let bal = 0;
+  const entries: LedgerEntry[] = raw.map((e) => { bal += e.amount; return { ...e, balance: Math.round(bal * 100) / 100 }; });
+  return { entries, balance: Math.round(bal * 100) / 100, open: entries.filter((e) => e.kind === 'deal' && !e.settled).length };
+}
+
+export function hostTotals(data: HostsData | undefined, rows: { r: number; cells: any[] }[]) {
+  const by: Record<number, number> = {};
+  let owedToUs = 0, weOwe = 0;
+  for (const h of data?.hosts || []) {
+    const b = hostLedger(h.id, data, rows).balance;
+    by[h.id] = b;
+    if (b > 0) owedToUs += b; else weOwe += -b;
+  }
+  return { by, owedToUs, weOwe };
+}
+const inrPlain = (n: number) => '₹' + Math.round(Math.abs(n)).toLocaleString('en-IN');
+
+/* Guest-facing facts for a booking. In a host's unit the guest must never see
+   the switch: address, Wi-Fi, times come from THAT unit (blank stays blank —
+   never our flat's Wi-Fi), while the contacts stay ours. */
+const CONTACT_FACTS = ['host_name', 'host_phone', 'manager_name', 'manager_phone'];
+export function guestFactsFor(o: { r: number; cells: any[] }, messages: MessagesData | undefined, hosts: HostsData | undefined) {
+  const own = factsOf(messages, stayPropOf(o.cells));
+  const deal = dealOf(hosts, o.r);
+  const u = deal && deal.unit_id ? unitById(hosts, deal.unit_id) : null;
+  if (!u) return { facts: own, hostUnit: null as HostUnit | null };
+  const facts: Record<string, string> = {};
+  for (const k of CONTACT_FACTS) if (own[k]) facts[k] = own[k];
+  const put = (k: string, v: string) => { if (String(v || '').trim()) facts[k] = String(v).trim(); };
+  put('address', u.address); put('map_link', u.map_link); put('wifi_name', u.wifi_name);
+  put('wifi_password', u.wifi_password); put('checkin_time', u.checkin_time); put('checkout_time', u.checkout_time);
+  return { facts, hostUnit: u };
+}

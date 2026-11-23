@@ -7,7 +7,7 @@ import { api } from './api';
 import { Btn, useToast } from './ui';
 import {
   CHECKLIST_PRESETS, FACT_KEY_RE, MESSAGE_STAGES, MessageImage, MessageTemplate, UNIT_FACTS, factKeyOf, factsOf,
-  messageValues, messagesFor, renderMessage, stayPropOf, varLabel, waLink,
+  guestFactsFor, messageValues, messagesFor, renderMessage, stayPropOf, varLabel, waLink,
 } from './logic';
 
 /* ── Messages ───────────────────────────────────────────────────────────────
@@ -51,13 +51,14 @@ export function BookingMessages({ row }: { row: number }) {
       </View>
     );
   }
-  const facts = factsOf(data, prop);
-  const values = messageValues(o, facts);
+  /* A guest in a host's unit gets that unit's address and Wi-Fi (see guestFactsFor). */
+  const { facts, hostUnit } = guestFactsFor(o, data, s.logs?.hosts);
+  const values = messageValues(o, facts, hostUnit);
   return (
     <View style={{ gap: 10 }}>
       {list.map((t) => (
         <MessageCard
-          key={t.id} t={t} row={row} values={values} facts={facts} prop={prop}
+          key={t.id} t={t} row={row} values={values} facts={facts} prop={hostUnit ? 'host unit ' + hostUnit.unit : prop} hostUnit={!!hostUnit}
           guestPhone={String(o.cells[13] ?? '').trim()}
           dueNow={t.stage === due && due !== 'any'}
           open={open === t.id} onToggle={() => setOpen(open === t.id ? null : t.id)}
@@ -67,8 +68,8 @@ export function BookingMessages({ row }: { row: number }) {
   );
 }
 
-function MessageCard({ t, row, values, facts, prop, guestPhone, dueNow, open, onToggle }: {
-  t: MessageTemplate; row: number; values: Record<string, string>; facts: Record<string, string>; prop: string;
+function MessageCard({ t, row, values, facts, prop, guestPhone, dueNow, open, onToggle, hostUnit }: {
+  t: MessageTemplate; row: number; values: Record<string, string>; facts: Record<string, string>; prop: string; hostUnit?: boolean;
   guestPhone: string; dueNow: boolean; open: boolean; onToggle: () => void;
 }) {
   const s = useStore();
@@ -167,7 +168,9 @@ function MessageCard({ t, row, values, facts, prop, guestPhone, dueNow, open, on
                 {'Missing: ' + missing.map((k) => varLabel(k)).join(', ') + '.'}
               </Text>
               <Text style={st.warnS}>
-                {s.me?.role === 'Admin'
+                {hostUnit
+                  ? 'The guest is in a host’s ' + prop + ' — add it to that unit under Setup → Hosts, or edit the text below for this send.'
+                  : s.me?.role === 'Admin'
                   ? 'Add it under Add → Property → ' + prop + ' → Guest info, or edit the text below for this send.'
                   : 'Ask an Admin to add it to ' + prop + '’s guest info, or edit the text below for this send.'}
               </Text>

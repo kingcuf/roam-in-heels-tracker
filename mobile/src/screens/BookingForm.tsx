@@ -6,7 +6,7 @@ import { confirmDestructive, useToast } from '../ui';
 import { Field, TxtInput, SelectField, DateField, TimeField } from '../fields';
 import { api } from '../api';
 import IdUploader, { StagedFile } from './IdUploader';
-import { ExtraGuest, IdSlot, frontForGuest, ownedPropertyName, parseExtraGuests, splitPreview, todayIso, unitNumberOf } from '../logic';
+import { ExtraGuest, Host, HostUnit, HostsData, IdSlot, dealOf, defaultCollector, hostById, unitById, frontForGuest, ownedPropertyName, parseExtraGuests, splitPreview, todayIso, unitNumberOf } from '../logic';
 import { BookingChecklist, ExtraStep, NewBookingSteps } from '../checklist';
 import { isMoneyText, moneyNum, moneyRule } from '../money';
 import { GuestNameInput, KnownGuest, useGuestDirectory } from '../guests';
@@ -79,7 +79,13 @@ export default function BookingForm() {
   /* Guests: 1 = lead (with phone), 2 = co-guest, 3+ = extras. The count is
      simply how many guests have been added. */
   const [nGuests, setNGuests] = useState(1);
-  const [partner, setPartner] = useState(false);   // "Partner flat…" chosen, number not typed yet
+  const [partner, setPartner] = useState(false);   // "Host's flat…" chosen, unit not picked yet
+  /* The host deal (Setup → Hosts). null = none. `hadDeal` remembers an edit
+     started with one, so removing it is sent as an explicit null. */
+  const [deal, setDeal] = useState<{ hostId: number; unitId: number; collectedBy: 'host' | 'us' } | null>(null);
+  const [hadDeal, setHadDeal] = useState(false);
+  const [fromHost, setFromHost] = useState(false);   // "Their guest → our flat" picker open
+  const hostsData = s.logs?.hosts;
   const [extras, setExtras] = useState<ExtraGuest[]>([]);
   /* One-off checklist steps typed for a NEW booking; sent with it. */
   const [steps, setSteps] = useState<ExtraStep[]>([]);
@@ -137,12 +143,15 @@ export default function BookingForm() {
         (base as any)[k] = k === 'repeat' ? (String(dr[k]) === '1' || dr[k] === true ? 'Yes' : 'No') : String(dr[k]);
       }
       setF(base);
+      const dl = dealOf(s.logs?.hosts, s.editB.row);
+      setDeal(dl ? { hostId: dl.host_id, unitId: dl.unit_id, collectedBy: dl.collected_by } : null);
+      setHadDeal(!!dl); setFromHost(false); setPartner(false);
       const ex = parseExtraGuests(c[27]);
       const n = Math.max(1, base.coGuest.trim() ? 2 : 1, ex.length ? 2 + ex.length : 1, Number(base.guests) || 1);
       setNGuests(Math.min(12, n));
       setExtras([...ex, ...Array.from({ length: Math.max(0, n - 2 - ex.length) }, () => ({ name: '', birthYr: '' }))]);
     } else {
-      setNGuests(1); setExtras([]);
+      setNGuests(1); setExtras([]); setDeal(null); setHadDeal(false);
       setF((p) => ({
         ...EMPTY,
         date: todayIso(),
@@ -187,7 +196,7 @@ export default function BookingForm() {
     setStaged({});
     setNGuests(1); setExtras([]); setSteps([]);
     setF({ ...EMPTY, date: todayIso(), property: s.props[0]?.name || '' });
-    setPartner(false);
+    setPartner(false); setDeal(null); setHadDeal(false); setFromHost(false);
   };
 
   const submit = async () => {
@@ -204,6 +213,7 @@ export default function BookingForm() {
       coGuestBirthYr: nGuests >= 2 ? f.coGuestBirthYr : '',
       extraGuests: extras.slice(0, Math.max(0, nGuests - 2)),
       repeat: f.repeat === 'Yes' ? '1' : '',
+      hostDeal: deal ? { hostId: deal.hostId, unitId: deal.unitId, collectedBy: deal.collectedBy } : hadDeal ? null : undefined,
     };
     const e: Errs = {};
     if (!d.property) e.property = 'Pick the property this booking is for.';
@@ -315,8 +325,21 @@ export default function BookingForm() {
   const otherUnits = s.props
     .filter((p) => p.name !== f.property)
     .map((p) => ({ name: p.name, no: unitNumberOf(p.name) || p.name }));
-  const stayMode: 'same' | 'owned' | 'partner' = partner ? 'partner'
+  const stayMode: 'same' | 'owned' | 'partner' = partner || (deal && deal.unitId) ? 'partner'
     : !f.stayUnit.trim() ? 'same' : otherUnits.some((u) => u.no === f.stayUnit.trim()) ? 'owned' : 'partner';
+  const dealHost = deal ? hostById(hostsData, deal.hostId) : null;
+  const dealUnit = deal && deal.unitId ? unitById(hostsData, deal.unitId) : null;
+  /* Live, from the money boxes: what this booking will leave on the host's ledger. */
+  const dealLine = (() => {
+    if (!deal || !dealHost) return '';
+    const first = dealHost.name.split(' ')[0];
+    if (deal.collectedBy === 'host') return isMoneyText(f.net) && f.net !== '' ? first + ' will owe you ' + inr(moneyNum(f.net)) + ' (your net)' : first + ' will owe you your net — fill in Net earned';
+    return isMoneyText(f.commission) && f.commission !== '' ? 'You’ll owe ' + first + ' ' + inr(Math.abs(moneyNum(f.commission))) + ' (their share)' : 'You’ll owe ' + first + ' their share — fill in the Money card';
+  })();
+  const pickHostUnit = (u: HostUnit) => {
+    setDeal({ hostId: u.host_id, unitId: u.id, collectedBy: deal?.collectedBy || defaultCollector(f.channel) });
+    set('stayUnit')(u.unit); setPartner(false);
+  };
   /* Live, like the auto-commission line: what each unit ends up with, on the
      figures currently in the boxes. Preview only — the Worker resolves and
      freezes the real split at save time, using the same rule. */
@@ -396,7 +419,7 @@ export default function BookingForm() {
           {/* Where the guest actually sleeps. Most stays are "same unit"; the
               other flats we own are a tap; a partner flat is typed. Same stored
               value as before: '' = same, bare unit number or free text. */}
-          <Field label="Guest stays in" hint={stayMode === 'partner' ? 'A flat we don’t own — type its number.' : undefined}>
+          <Field label="Guest stays in">
             <View style={st.unitChips}>
               <TouchableOpacity accessibilityRole="radio" accessibilityState={{ selected: stayMode === 'same' }}
                 style={[st.unitChip, stayMode === 'same' && st.unitChipOn]}
@@ -415,14 +438,44 @@ export default function BookingForm() {
               })}
               <TouchableOpacity accessibilityRole="radio" accessibilityState={{ selected: stayMode === 'partner' }}
                 style={[st.unitChip, stayMode === 'partner' && st.unitChipOn]}
-                onPress={() => { setPartner(true); if (stayMode !== 'partner') set('stayUnit')(''); }}>
-                <Text style={[st.unitChipTxt, stayMode === 'partner' && st.unitChipTxtOn]}>Partner flat…</Text>
+                onPress={() => { if (stayMode !== 'partner') { setPartner(true); set('stayUnit')(''); setDeal(null); setFromHost(false); } }}>
+                <Text style={[st.unitChipTxt, stayMode === 'partner' && st.unitChipTxtOn]}>Host’s flat…</Text>
               </TouchableOpacity>
             </View>
-            {stayMode === 'partner' ? (
-              <View style={{ marginTop: 8 }}><TxtInput value={f.stayUnit} onChange={set('stayUnit')} placeholder="e.g. 2121" /></View>
+            {stayMode === 'partner' && dealUnit ? (
+              <View style={st.picked}>
+                <Text style={st.pickedT}>{'Unit ' + dealUnit.unit + (dealUnit.building ? ' · ' + dealUnit.building : '')}</Text>
+                <Text style={st.pickedS}>{'Host: ' + (dealHost?.name || '')}</Text>
+                <TouchableOpacity onPress={() => { setDeal(null); setPartner(true); set('stayUnit')(''); }} hitSlop={8} style={st.pickedX}><Text style={st.link}>Change</Text></TouchableOpacity>
+              </View>
+            ) : stayMode === 'partner' ? (
+              <HostUnitPick data={hostsData} typed={f.stayUnit} onPick={pickHostUnit} onType={set('stayUnit')} />
             ) : null}
           </Field>
+          {/* Their guest → our flat: the host is the link, the unit is ours. */}
+          {stayMode !== 'partner' ? (
+            deal && dealHost ? (
+              <View style={st.picked}>
+                <Text style={st.pickedT}>{'Guest came from ' + dealHost.name}</Text>
+                <Text style={st.pickedS}>Their guest, in our flat</Text>
+                <TouchableOpacity onPress={() => setDeal(null)} hitSlop={8} style={st.pickedX}><Text style={st.link}>Remove</Text></TouchableOpacity>
+              </View>
+            ) : fromHost ? (
+              <HostPick data={hostsData} onPick={(h) => { setDeal({ hostId: h.id, unitId: 0, collectedBy: defaultCollector(f.channel) }); setFromHost(false); }} onCancel={() => setFromHost(false)} />
+            ) : (
+              <TouchableOpacity onPress={() => setFromHost(true)} hitSlop={6} style={{ alignSelf: 'flex-start', marginTop: -2, marginBottom: 6 }}>
+                <Text style={st.link}>+ Guest came from another host</Text>
+              </TouchableOpacity>
+            )
+          ) : null}
+          {deal && dealHost ? (
+            <Field label="Who collected the guest’s money?">
+              <ChoiceChips value={deal.collectedBy === 'host' ? dealHost.name.split(' ')[0] : 'We did'}
+                options={[dealHost.name.split(' ')[0], 'We did']}
+                onChange={(v) => setDeal({ ...deal, collectedBy: v === 'We did' ? 'us' : 'host' })} />
+              <Text style={st.dealLine}>{dealLine}</Text>
+            </Field>
+          ) : null}
         </FormCard>
         </View>
 
@@ -567,7 +620,7 @@ export default function BookingForm() {
           <SplitNote split={split} pend={splitPend} prop={f.property} />
           <Two>
             <View style={{ flex: 1 }}>
-              <Field label="Commission (₹)" hint="Auto = paid − net.">
+              <Field label={deal ? (deal.unitId ? 'Host’s share (₹)' : 'Host’s commission (₹)') : 'Commission (₹)'} hint="Auto = paid − net.">
                 <TxtInput value={f.commission} onChange={set('commission')} money onFocus={() => revealCard('money')} />
               </Field>
             </View>
@@ -612,6 +665,46 @@ export default function BookingForm() {
   );
 }
 
+/* Search-as-you-type over every host unit ("3103", "Arbaz"). Not listed?
+   Type the flat number — the booking saves without a ledger link, as before. */
+function HostUnitPick({ data, typed, onPick, onType }: { data?: HostsData; typed: string; onPick: (u: HostUnit) => void; onType: (v: string) => void }) {
+  const [q, setQ] = useState(typed);
+  const units = data?.units || [];
+  const name = (id: number) => (data?.hosts || []).find((h) => h.id === id)?.name || '';
+  const t = q.trim().toLowerCase();
+  const hits = units.filter((u) => !t || (u.unit + ' ' + u.building + ' ' + name(u.host_id)).toLowerCase().includes(t)).slice(0, 6);
+  return (
+    <View style={{ marginTop: 8, gap: 6 }}>
+      <TxtInput value={q} onChange={(v) => { setQ(v); onType(v); }} placeholder={units.length ? 'Search unit or host — e.g. 3103' : 'Flat number, e.g. 2121'} />
+      {hits.map((u) => (
+        <TouchableOpacity key={u.id} style={st.hit} onPress={() => onPick(u)} activeOpacity={0.7}>
+          <Text style={st.hitT}>{'Unit ' + u.unit}</Text>
+          <Text style={st.hitS} numberOfLines={1}>{name(u.host_id) + (u.building ? ' · ' + u.building : '')}</Text>
+        </TouchableOpacity>
+      ))}
+      <Text style={st.hitNote}>{units.length ? 'Not listed? The typed number saves as before, without a ledger link — add the host under Setup → Hosts.' : 'No host units yet — add hosts under Setup → Hosts to track what you owe them.'}</Text>
+    </View>
+  );
+}
+function HostPick({ data, onPick, onCancel }: { data?: HostsData; onPick: (h: Host) => void; onCancel: () => void }) {
+  const [q, setQ] = useState('');
+  const t = q.trim().toLowerCase();
+  const hits = (data?.hosts || []).filter((h) => !t || (h.name + ' ' + h.phone).toLowerCase().includes(t)).slice(0, 6);
+  return (
+    <View style={{ gap: 6, marginBottom: 8 }}>
+      <TxtInput value={q} onChange={setQ} placeholder="Which host sent them?" autoFocus />
+      {hits.map((h) => (
+        <TouchableOpacity key={h.id} style={st.hit} onPress={() => onPick(h)} activeOpacity={0.7}>
+          <Text style={st.hitT}>{h.name}</Text>
+          {h.phone ? <Text style={st.hitS}>{h.phone}</Text> : null}
+        </TouchableOpacity>
+      ))}
+      {!(data?.hosts || []).length ? <Text style={st.hitNote}>No hosts yet — add them under Setup → Hosts.</Text> : null}
+      <TouchableOpacity onPress={onCancel} hitSlop={6}><Text style={[st.link, { color: C.bark }]}>Cancel</Text></TouchableOpacity>
+    </View>
+  );
+}
+
 const st = StyleSheet.create({
   section: { borderTopWidth: 1, borderTopColor: C.hair, paddingTop: 15, marginTop: 6, marginBottom: 4 },
   sTitle: { fontFamily: F.xbold, fontSize: 13, color: C.ink, letterSpacing: 0.3, textTransform: 'uppercase' },
@@ -619,6 +712,16 @@ const st = StyleSheet.create({
   two: { flexDirection: 'row', gap: 10 },
   calc: { fontFamily: F.semi, fontSize: 12, color: C.blue2, marginTop: -4, marginBottom: 6 },
   unitChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
+  link: { fontFamily: F.bold, fontSize: 13, color: C.blue2 },
+  picked: { marginTop: 8, marginBottom: 8, padding: 12, borderRadius: 14, backgroundColor: C.amberbg, borderWidth: 1, borderColor: '#EAD9B8' },
+  pickedT: { fontFamily: F.bold, fontSize: 14, color: C.ink, paddingRight: 70 },
+  pickedS: { fontFamily: F.med, fontSize: 12, color: C.bark, marginTop: 2 },
+  pickedX: { position: 'absolute', right: 12, top: 12 },
+  hit: { flexDirection: 'row', alignItems: 'baseline', gap: 8, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 12, backgroundColor: '#fff', borderWidth: 1, borderColor: C.line },
+  hitT: { fontFamily: F.bold, fontSize: 14, color: C.ink },
+  hitS: { fontFamily: F.med, fontSize: 12, color: C.bark, flex: 1 },
+  hitNote: { fontFamily: F.med, fontSize: 11.5, color: C.muted, lineHeight: 16 },
+  dealLine: { fontFamily: F.semi, fontSize: 12.5, color: C.blue2, marginTop: 8 },
   unitChip: {
     borderWidth: 1, borderColor: C.line, borderRadius: 20,
     paddingHorizontal: 10, paddingVertical: 4, backgroundColor: '#fff',

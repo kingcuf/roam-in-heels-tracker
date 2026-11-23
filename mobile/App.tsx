@@ -29,6 +29,9 @@ import IdSheet from './src/screens/IdSheet';
 import BookingPage from './src/screens/BookingPage';
 import MessageLibrary from './src/screens/MessageLibrary';
 import UnitGallery from './src/screens/UnitGallery';
+import Hosts from './src/screens/Hosts';
+import { hostTotals } from './src/logic';
+import { inr } from './src/theme';
 import TeamScreen from './src/screens/TeamScreen';
 import IntroFilm from './src/intro/IntroFilm';
 import { markIntroPlayed, shouldPlayIntro } from './src/intro/policy';
@@ -57,6 +60,7 @@ const ADD_SEGMENTS: { key: AddSeg; label: string }[] = [
   { key: 'prop', label: 'Property' },
   { key: 'inv', label: 'Inventory' },
   { key: 'msg', label: 'Messages' },
+  { key: 'host', label: 'Hosts' },
 ];
 
 /* One Add segment: the form, with its record log a tap away behind the
@@ -92,8 +96,14 @@ const SETUP: { key: AddSeg; label: string; icon: string; desc: string }[] = [
   { key: 'prop', label: 'Properties', icon: '⌂', desc: 'Units, rent, guest info for messages' },
   { key: 'inv', label: 'Inventory', icon: '▤', desc: 'Linen, toiletries and stock per unit' },
   { key: 'msg', label: 'Messages', icon: '✉', desc: 'WhatsApp templates for guests and hosts' },
+  { key: 'host', label: 'Hosts', icon: '⇄', desc: 'Partner hosts, their units, and who owes whom' },
 ];
-const SETUP_KEYS: AddSeg[] = ['prop', 'inv', 'msg'];
+const hostSub = (s: ReturnType<typeof useStore>) => {
+  const t = hostTotals(s.logs?.hosts, s.logs?.bookings?.rows || []);
+  return t.weOwe < 1 && t.owedToUs < 1 ? 'All settled with every host'
+    : [t.weOwe >= 1 ? 'You owe ' + inr(t.weOwe) : '', t.owedToUs >= 1 ? 'Owed to you ' + inr(t.owedToUs) : ''].filter(Boolean).join(' · ');
+};
+const SETUP_KEYS: AddSeg[] = ['prop', 'inv', 'msg', 'host'];
 
 function AddContainer() {
   const s = useStore();
@@ -164,7 +174,7 @@ function AddContainer() {
               <View style={st.hubIcon}><Text style={st.hubIconT}>{x.icon}</Text></View>
               <View style={{ flex: 1 }}>
                 <Text style={st.hubT}>{x.label}</Text>
-                <Text style={st.hubD}>{x.desc}</Text>
+                <Text style={st.hubD}>{x.key === 'host' && s.logs?.hosts?.hosts.length ? hostSub(s) : x.desc}</Text>
               </View>
               {(x.key === 'prop' && s.editP) || (x.key === 'inv' && s.invEdit) ? <View style={st.hubDot} /> : null}
               <Text style={st.hubChev}>›</Text>
@@ -181,6 +191,9 @@ function AddContainer() {
       {/* Inventory keeps its own items/movements handling internally. */}
       {s.addSegs.includes('inv') && (
         <View style={[{ flex: 1 }, pane('inv') && st.hidden]}>{back}<Inventory /></View>
+      )}
+      {s.addSegs.includes('host') && (
+        <View style={[{ flex: 1 }, pane('host') && st.hidden]}>{s.hostFocus ? null : back}<Hosts /></View>
       )}
       {/* The message library (Admin only — see store.addSegs). */}
       {s.addSegs.includes('msg') && (

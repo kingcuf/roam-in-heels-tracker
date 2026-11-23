@@ -13,7 +13,7 @@ import { Btn } from '../ui';
 import { BookingChecklist } from '../checklist';
 import { BookingMessages } from '../messages';
 import {
-  ageFrom, bannerUnitOf, cardOf, checklistFor, ciFmtDay, ciNum, ciParse, idSlotsOf, IdSlot, parseExtraGuests,
+  ageFrom, bannerUnitOf, dealAmount, dealOf, hostById, hostLedger, unitById, cardOf, checklistFor, ciFmtDay, ciNum, ciParse, idSlotsOf, IdSlot, parseExtraGuests,
   reviewStatusOf, splitOf, stayPhase, StayPhase, stayPropOf,
 } from '../logic';
 import { coverFor } from '../unitCovers';
@@ -256,6 +256,11 @@ function Details({ row, c, b, stayProp, split, unit }: {
   const missing = slots.filter((sl) => have.indexOf(sl) < 0);
   const review = reviewStatusOf(c);
   const discount = ciNum(c[7]), commission = ciNum(c[10]);
+  const deal = dealOf(s.logs?.hosts, row);
+  const dealHost = deal ? hostById(s.logs?.hosts, deal.host_id) : null;
+  const dealUnit = deal && deal.unit_id ? unitById(s.logs?.hosts, deal.unit_id) : null;
+  const dealAmt = deal ? dealAmount(deal, c) : 0;
+  const hostBal = dealHost ? hostLedger(dealHost.id, s.logs?.hosts, s.logs?.bookings?.rows || []).balance : 0;
 
   const uploadIds = () => s.setIdTarget({
     row, id: b.id, prop: b.prop, guest: b.guest, coGuest: b.coGuest,
@@ -287,10 +292,25 @@ function Details({ row, c, b, stayProp, split, unit }: {
         <Row label="Nights" value={b.nights === null ? '' : b.nights === 0 ? 'Day use' : String(b.nights)} />
         <Row label="Stay unit" value={unit} />
         {/* Booked under one flat, slept in another: both matter. */}
-        {split || (b.prop && stayProp && b.prop !== stayProp)
+        {split || dealUnit || (b.prop && stayProp && b.prop !== stayProp)
           ? <Row label="Booked under" value={b.prop} tone={C.blue2} />
           : <Row label="Property" value={stayProp} />}
       </Section>
+
+      {deal && dealHost ? (
+        <Section title="Host">
+          <TouchableOpacity onPress={() => s.openHost(dealHost.id)} activeOpacity={0.7} style={st.row}>
+            <Text style={st.lbl}>Host</Text>
+            <Text style={[st.val, { color: C.blue2 }]}>{dealHost.name + '  ›'}</Text>
+          </TouchableOpacity>
+          <Row label={dealUnit ? 'Their unit' : 'Deal'} value={dealUnit ? dealUnit.unit + (dealUnit.building ? ' · ' + dealUnit.building : '') : 'Their guest, in our flat'} />
+          <Row label="Collected by" value={deal.collected_by === 'us' ? 'Us' : dealHost.name.split(' ')[0]} />
+          <Row label="On the ledger" strong
+            value={deal.settled ? 'Settled (before the ledger)' : dealAmt > 0 ? dealHost.name.split(' ')[0] + ' owes you ' + inr(dealAmt) : 'You owe ' + dealHost.name.split(' ')[0] + ' ' + inr(-dealAmt)}
+            tone={deal.settled ? C.muted : dealAmt > 0 ? C.green : C.red} />
+          <Row label={'Overall with ' + dealHost.name.split(' ')[0]} value={hostBal === 0 ? 'All settled' : hostBal > 0 ? 'Owes you ' + inr(hostBal) : 'You owe ' + inr(-hostBal)} />
+        </Section>
+      ) : null}
 
       <Section title="Booking">
         <Row label="Booking ID" value={b.id} selectable />
@@ -305,7 +325,7 @@ function Details({ row, c, b, stayProp, split, unit }: {
         {b.listPrice ? <Row label="List price" value={inr(b.listPrice)} /> : null}
         {discount ? <Row label="Discount" value={'− ' + inr(discount)} /> : null}
         <Row label="Guest paid" value={b.paid ? inr(b.paid) : ''} />
-        {commission ? <Row label="Commission" value={'− ' + inr(commission)} /> : null}
+        {commission ? <Row label={deal ? (deal.unit_id ? 'Host’s share' : 'Host’s commission') : 'Commission'} value={'− ' + inr(commission)} /> : null}
         {split ? <Row label="Split fee" value={inr(split.fee)} /> : null}
         <Row label="Net earned" value={inr(b.net)} tone={C.green} strong />
         <Row label="Awaiting payout" value={b.pending > 0 ? inr(b.pending) : 'Nothing due'} tone={b.pending > 0 ? C.red : C.muted} />
