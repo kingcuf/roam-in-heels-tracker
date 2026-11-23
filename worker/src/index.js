@@ -262,6 +262,9 @@ export default {
         case 'changePin':      out = await changePin(env, me, payload); break;
         case 'dashboard':      out = redactDashboard(await getDashboard(env, pin, p.property, p.from, p.to), me); break;
         case 'targets':        out = await getTargets(env); break;
+        case 'addChecklistItem':    out = await addChecklistItem(env, me, payload); break;
+        case 'removeChecklistItem': out = await removeChecklistItem(env, me, payload); break;
+        case 'tickChecklist':       out = await tickChecklist(env, me, row, payload); break;
         case 'setTarget':      out = await setTarget(env, me, payload); break;
         case 'properties':     out = await getProperties(env, pin); break;
         case 'addBooking':     out = await addBooking(env, pin, payload); break;
@@ -467,6 +470,8 @@ const PROPERTY_NAME_REFS = [
   ['expenses',  'property'],
   ['inv_items', 'property'],
   ['enquiries', 'property'],
+  ['checklist_items', 'property'],
+  ['revenue_targets', 'scope'],
 ];
 
 async function renamePropertyRefs(env, oldName, newName) {
@@ -788,10 +793,14 @@ async function addBooking(env, pin, d) {
   /* Resolved and frozen here, never at read time — see the 0008 migration. */
   Object.assign(f, await splitFor(env, f));
   f.booking_id = await nextBookingId(env);
+  const extra = checklistExtraOf(d);   // validated before the insert, so a bad step cannot half-save a booking
   const cols = Object.keys(f);
   const r = await env.DB.prepare(
     `INSERT INTO bookings (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`
   ).bind(...cols.map(c => f[c])).run();
+  /* One-off checklist steps typed on the booking form. A manager's new booking
+     carries them inside the approval request, so they land when it is approved. */
+  if (extra.length) await insertBookingSteps(env, r.meta.last_row_id, extra, '');
   /* row lets the app attach guest IDs picked before the booking existed. */
   return { ok: true, message: `Booking ${f.booking_id} added`, row: r.meta.last_row_id, bookingId: f.booking_id };
 }
@@ -896,6 +905,14 @@ async function deleteRowById(env, pin, table, row, message) {
   if (table === 'bookings') await deleteBookingAttachments(env, row);
   const res = await env.DB.prepare(`DELETE FROM ${table} WHERE id = ?`).bind(row).run();
   if (!res.meta.changes) bad('Row not found');
+  /* Its one-off checklist steps and every tick go with it. Property-wide steps
+     belong to the property and stay. */
+  if (table === 'bookings') {
+    await env.DB.batch([
+      env.DB.prepare('DELETE FROM checklist_ticks WHERE booking_row = ?').bind(row),
+      env.DB.prepare('DELETE FROM checklist_items WHERE booking_row = ?').bind(row),
+    ]);
+  }
   return { ok: true, message };
 }
 
@@ -1066,6 +1083,131 @@ async function setTarget(env, me, d) {
   return { ok: true, message: 'Target saved' };
 }
 
+/* ─────────────── BOOKING CHECKLISTS ───────────────
+   Steps a property manager works through per booking, grouped by stage.
+   Property-wide steps are set up by an Admin on the property; one-off steps
+   can be added to a single booking by anyone who can add or edit bookings.
+   Ticking is immediate (no approval request) and records who and when — the
+   checklist is operations, not the books, and changes no figure.
+
+   'ids' and 'review' are LINKED steps: the app reads them from the guest ID
+   uploads and the booking's review status, so they are never ticked here. */
+const CHECKLIST_STAGES = new Set(['before', 'checkin', 'stay', 'checkout']);
+const CHECKLIST_PRESETS = {
+  ids:          { label: 'Guest IDs collected',          stage: 'checkin' },
+  unit_details: { label: 'Unit details shared',          stage: 'before' },
+  entry_pass:   { label: 'Entry passes created & sent',  stage: 'before' },
+  campaign:     { label: 'Campaign message shared',      stage: 'stay' },
+  review:       { label: 'Asked for review',             stage: 'checkout' },
+};
+const LINKED_PRESETS = new Set(['ids', 'review']);
+
+function checklistStep(d) {
+  const preset = String(d.preset || '').trim();
+  if (preset && !CHECKLIST_PRESETS[preset]) bad('Unknown checklist step: ' + preset);
+  const label = clip(d.label || (preset ? CHECKLIST_PRESETS[preset].label : ''), 120);
+  if (!label) bad('Give the checklist step a name');
+  const stage = String(d.stage || (preset ? CHECKLIST_PRESETS[preset].stage : 'checkin'));
+  if (!CHECKLIST_STAGES.has(stage)) bad('Unknown checklist stage: ' + stage);
+  return { preset, label, stage };
+}
+/* The one-off steps sent with a new booking: [{label, stage}] — custom only. */
+function checklistExtraOf(d) {
+  const list = Array.isArray(d.checklistExtra) ? d.checklistExtra : [];
+  if (list.length > 30) bad('Too many checklist steps on one booking');
+  return list.map((x) => checklistStep({ label: x && x.label, stage: x && x.stage }));
+}
+async function insertBookingSteps(env, row, steps, by) {
+  const now = new Date().toISOString();
+  await env.DB.batch(steps.map((st, i) => env.DB.prepare(
+    `INSERT INTO checklist_items (property, booking_row, preset, label, stage, sort, created_at, created_by)
+     VALUES ('', ?, '', ?, ?, ?, ?, ?)`).bind(row, st.label, st.stage, i, now, by)));
+}
+
+/* Rides along on `logs`: every step (removed property steps included, so past
+   bookings keep theirs) and every tick. */
+async function checklistData(env) {
+  const items = await env.DB.prepare(
+    `SELECT id, property, booking_row, preset, label, stage, sort, created_at, removed_at
+       FROM checklist_items ORDER BY sort, id`).all();
+  const ticks = await env.DB.prepare('SELECT booking_row, item_id, done_by, done_at FROM checklist_ticks').all();
+  return { items: items.results || [], ticks: ticks.results || [] };
+}
+
+async function addChecklistItem(env, me, d) {
+  const st = checklistStep(d);
+  const now = new Date().toISOString();
+  if (d.scope === 'property') {
+    if (!me.isAdmin) bad('Only an Admin can change a property’s checklist');
+    const property = clip(d.property, 120);
+    const p = await env.DB.prepare('SELECT 1 FROM properties WHERE name = ?').bind(property).first();
+    if (!p) bad('Unknown property: ' + property);
+    if (st.preset) {
+      const dup = await env.DB.prepare(
+        `SELECT 1 FROM checklist_items WHERE property = ? AND preset = ? AND removed_at = ''`).bind(property, st.preset).first();
+      if (dup) bad('“' + st.label + '” is already on this checklist');
+    }
+    const n = await env.DB.prepare(`SELECT COALESCE(MAX(sort), 0) + 1 AS n FROM checklist_items WHERE property = ?`).bind(property).first();
+    await env.DB.prepare(
+      `INSERT INTO checklist_items (property, booking_row, preset, label, stage, sort, created_at, created_by)
+       VALUES (?, 0, ?, ?, ?, ?, ?, ?)`).bind(property, st.preset, st.label, st.stage, n.n, now, me.username).run();
+    return { ok: true, message: 'Step added to ' + property };
+  }
+  if (d.scope === 'booking') {
+    if (!me.can('booking.add') && !me.can('booking.update')) bad('You need booking rights to add a checklist step');
+    if (st.preset) bad('Presets are set on the property, not on one booking');
+    const row = Number(d.row); checkRow(row);
+    const b = await env.DB.prepare('SELECT 1 FROM bookings WHERE id = ?').bind(row).first();
+    if (!b) bad('Booking not found');
+    await insertBookingSteps(env, row, [st], me.username);
+    return { ok: true, message: 'Step added to this booking' };
+  }
+  bad('Missing checklist scope');
+}
+
+async function removeChecklistItem(env, me, d) {
+  const id = Number(d.id); checkRow(id);
+  const it = await env.DB.prepare('SELECT id, property, booking_row FROM checklist_items WHERE id = ?').bind(id).first();
+  if (!it) bad('Checklist step not found');
+  if (it.booking_row) {
+    if (!me.can('booking.add') && !me.can('booking.update')) bad('You need booking rights to remove a checklist step');
+    await env.DB.batch([
+      env.DB.prepare('DELETE FROM checklist_ticks WHERE item_id = ?').bind(id),
+      env.DB.prepare('DELETE FROM checklist_items WHERE id = ?').bind(id),
+    ]);
+    return { ok: true, message: 'Step removed' };
+  }
+  if (!me.isAdmin) bad('Only an Admin can change a property’s checklist');
+  /* Soft: bookings that were already over keep the step they had. */
+  await env.DB.prepare(`UPDATE checklist_items SET removed_at = ? WHERE id = ? AND removed_at = ''`)
+    .bind(new Date().toISOString(), id).run();
+  return { ok: true, message: 'Step removed from ' + it.property };
+}
+
+async function tickChecklist(env, me, row, d) {
+  checkRow(row);
+  const id = Number(d.item); checkRow(id);
+  const it = await env.DB.prepare('SELECT property, booking_row, preset FROM checklist_items WHERE id = ?').bind(id).first();
+  if (!it) bad('Checklist step not found');
+  if (LINKED_PRESETS.has(it.preset)) bad('This step ticks itself from the booking — upload the IDs or update the review status');
+  const b = await env.DB.prepare('SELECT property, stay_property FROM bookings WHERE id = ?').bind(row).first();
+  if (!b) bad('Booking not found');
+  /* The step must belong to this booking: its own one-off step, or a step of
+     the property the guest actually stays in (a cross-unit booking follows the
+     guest, like the calendar does). */
+  const stayProp = b.stay_property || b.property;
+  if (it.booking_row ? it.booking_row !== row : it.property !== stayProp) bad('That step is not on this booking’s checklist');
+  if (d.done) {
+    await env.DB.prepare(
+      `INSERT INTO checklist_ticks (booking_row, item_id, done_by, done_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(booking_row, item_id) DO UPDATE SET done_by = excluded.done_by, done_at = excluded.done_at`
+    ).bind(row, id, me.username, new Date().toISOString()).run();
+    return { ok: true, message: 'Marked done' };
+  }
+  await env.DB.prepare('DELETE FROM checklist_ticks WHERE booking_row = ? AND item_id = ?').bind(row, id).run();
+  return { ok: true, message: 'Marked not done' };
+}
+
 /* ─────────────── REVIEW FOLLOW-UPS ───────────────
    Approach B: the state lives on the booking so a follow-up can be cleared.
    'pending' is stored as '' — the same value every pre-existing row already has,
@@ -1161,7 +1303,9 @@ async function getLogs(env, pin) {
     /* Same trip, with the attachment ids: the Action tab renders the lead
        guest's ID document as the card's avatar and would otherwise need one
        request per card to find out which object to ask for. */
-    idDocs: await idDocs(env)
+    idDocs: await idDocs(env),
+    /* Booking checklists: steps and ticks, for the booking page. */
+    checklist: await checklistData(env)
   };
 }
 

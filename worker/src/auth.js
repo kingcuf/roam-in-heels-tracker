@@ -63,6 +63,9 @@ export const ACTION_RIGHTS = {
   dashboard: 'reports.view',
   /* Reading needs the Report; setting is further limited to Admins in setTarget(). */
   targets: 'reports.view', setTarget: 'reports.view',
+  /* Ticking is the manager's job. Adding/removing steps is checked per scope
+     inside the handlers (property steps: Admin; one-off steps: booking rights). */
+  tickChecklist: 'action.manage',
   addBooking: 'booking.add', updateBooking: 'booking.update', deleteBooking: 'booking.delete',
   addExpense: 'expense.add', updateExpense: 'expense.update', deleteExpense: 'expense.delete',
   addSaving: 'saving.add', updateSaving: 'saving.update', deleteSaving: 'saving.delete',
@@ -85,6 +88,7 @@ export const ACTION_RIGHTS = {
 export const OPEN_ACTIONS = new Set([
   'login', 'properties', 'logs', 'invData', 'idStatus', 'idDocs', 'listAttachments', 'getAttachment',
   'tickets', 'withdrawTicket', 'changePin', 'uploadAvatar', 'deleteAvatar', 'getAvatar',
+  'addChecklistItem', 'removeChecklistItem',
 ]);
 
 export const rightLabel = (key) => {

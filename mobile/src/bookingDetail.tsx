@@ -3,6 +3,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import { C, F, inr } from './theme';
 import { CardData, ciFmtDay, ciParse } from './logic';
 import { Btn } from './ui';
+import { BookingChecklist } from './checklist';
 
 /* Read-only detail of one booking, from the raw row via cardOf(). Same look as
    the Calendar's stay detail, but built on CardData so it also copes with a
@@ -39,6 +40,8 @@ export function BookingDetail({ b, onEdit }: { b: CardData; onEdit?: () => void 
       <Row label="Net earning" value={inr(b.net)} tone={C.green} />
       <Row label="Awaiting payout" value={b.pending > 0 ? inr(b.pending) : '—'} tone={b.pending > 0 ? C.red : C.muted} />
       {b.notes ? <Row label="Notes" value={b.notes} /> : null}
+
+      <BookingChecklist row={b.row} />
 
       {onEdit ? <Btn title="Edit this booking" onPress={onEdit} style={{ marginTop: 16 }} /> : null}
     </View>

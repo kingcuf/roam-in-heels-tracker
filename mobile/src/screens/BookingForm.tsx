@@ -6,7 +6,8 @@ import { confirmDestructive, useToast } from '../ui';
 import { Field, TxtInput, SelectField, DateField, TimeField } from '../fields';
 import { api } from '../api';
 import IdUploader, { StagedFile } from './IdUploader';
-import { ExtraGuest, IdSlot, frontForGuest, parseExtraGuests, splitPreview, todayIso, unitNumberOf } from '../logic';
+import { ExtraGuest, IdSlot, frontForGuest, ownedPropertyName, parseExtraGuests, splitPreview, todayIso, unitNumberOf } from '../logic';
+import { BookingChecklist, ExtraStep, NewBookingSteps } from '../checklist';
 import { isMoneyText, moneyNum, moneyRule } from '../money';
 import { GuestNameInput, KnownGuest, useGuestDirectory } from '../guests';
 import { TouchableOpacity } from 'react-native';
@@ -78,6 +79,8 @@ export default function BookingForm() {
      simply how many guests have been added. */
   const [nGuests, setNGuests] = useState(1);
   const [extras, setExtras] = useState<ExtraGuest[]>([]);
+  /* One-off checklist steps typed for a NEW booking; sent with it. */
+  const [steps, setSteps] = useState<ExtraStep[]>([]);
   const dir = useGuestDirectory(s.editB?.row);
   /* Same as the expense form: every complaint at once, on the field it is
      about, rather than one at a time in a bar at the foot of the screen. */
@@ -180,7 +183,7 @@ export default function BookingForm() {
     setResub(0);
     setErrs({});
     setStaged({});
-    setNGuests(1); setExtras([]);
+    setNGuests(1); setExtras([]); setSteps([]);
     setF({ ...EMPTY, date: todayIso(), property: s.props[0]?.name || '' });
   };
 
@@ -223,7 +226,7 @@ export default function BookingForm() {
       if (s.editB) {
         res = await api.updateBooking(s.pin, s.editB.row, { ...d, bookingId: s.editB.bookingId });
       } else {
-        res = await api.addBooking(s.pin, d, resub);
+        res = await api.addBooking(s.pin, steps.length ? { ...d, checklistExtra: steps } : d, resub);
         /* Guest IDs picked before the booking existed go up now. */
         const slots = Object.keys(staged) as IdSlot[];
         if (slots.length && res?.row) {
@@ -576,6 +579,19 @@ export default function BookingForm() {
         <FormCard title="Notes" step={5} i={5}>
           <Field label="Notes"><TxtInput value={f.notes} onChange={set('notes')} placeholder="Anything worth remembering" /></Field>
         </FormCard>
+
+        {/* Checklist. A new booking previews its property's steps (the flat
+            the guest stays in, as the checklist itself uses) and can carry
+            one-off steps; an existing one shows the live checklist, which
+            saves tick by tick rather than with this form's Save. */}
+        {s.logs?.checklist ? (
+          <FormCard title="Checklist" step={6} i={6}
+            note={editing ? 'Saved as you tick — not part of “Save changes”.' : 'Steps the property manager will work through for this booking.'}>
+            {editing && s.editB
+              ? <BookingChecklist row={s.editB.row} bare />
+              : <NewBookingSteps property={ownedPropertyName(s.props, f.stayUnit) || f.property} extras={steps} onChange={setSteps} />}
+          </FormCard>
+        ) : null}
 
       <FormFooter
         title={editing ? 'Edit Booking' : resub ? 'Edit Request' : 'Add Booking'}

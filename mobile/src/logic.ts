@@ -2,7 +2,7 @@
 // These run over the raw getLogs() blocks, exactly like the website does.
 
 export type LogBlock = { headers: string[]; rows: { r: number; cells: any[] }[] };
-export type Logs = { bookings: LogBlock; expenses: LogBlock; savings?: LogBlock; tasks?: LogBlock; enquiries?: LogBlock };
+export type Logs = { bookings: LogBlock; expenses: LogBlock; savings?: LogBlock; tasks?: LogBlock; enquiries?: LogBlock; checklist?: ChecklistData };
 
 export const CI_MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
@@ -896,6 +896,21 @@ export type IdMap = Record<string, IdSlot[]>;   // booking row id -> slots alrea
 export type IdDoc = { id: number; slot: IdSlot; type: string };
 export type IdDocMap = Record<string, IdDoc[]>;
 
+/* Which ID fronts a booking needs. Shared by the IDs queue and the checklist's
+   linked "Guest IDs collected" step, so both agree on what complete means. */
+export function idSlotsOf(c: any[]): IdSlot[] {
+  const coGuest = String(c[15] ?? '').trim();
+  const guests = ciNum(c[17]);
+  /* Two guests means two IDs, whether or not anyone typed the second name.
+     Keying this off the co-guest FIELD (as it used to) under-counted 42 live
+     bookings — Amegh's two-guest stay asked for one ID because the name box
+     was empty. */
+  const needsCo = !!coGuest || guests >= 2;
+  const slots: IdSlot[] = needsCo ? ['lead', 'co'] : ['lead'];
+  /* Named guests beyond the second each need an ID too. */
+  parseExtraGuests(c[27]).forEach((g, i) => { if (g.name.trim()) slots.push(frontForGuest(i + 3)); });
+  return slots;
+}
 export function computeIdsPending(
   block: LogBlock | null, filter: string, have: IdMap | null
 ): IdItem[] {
@@ -913,14 +928,7 @@ export function computeIdsPending(
     if (!ci || ci.getTime() < today) return;
     const coGuest = String(c[15] ?? '').trim();
     const guests = ciNum(c[17]);
-    /* Two guests means two IDs, whether or not anyone typed the second name.
-       Keying this off the co-guest FIELD (as it used to) under-counted 42 live
-       bookings — Amegh's two-guest stay asked for one ID because the name box
-       was empty. */
-    const needsCo = !!coGuest || guests >= 2;
-    const slots: IdSlot[] = needsCo ? ['lead', 'co'] : ['lead'];
-    /* Named guests beyond the second each need an ID too. */
-    parseExtraGuests(c[27]).forEach((g, i) => { if (g.name.trim()) slots.push(frontForGuest(i + 3)); });
+    const slots = idSlotsOf(c);
     const got = (have && have[String(o.r)]) || [];
     const missing = slots.filter((sl) => got.indexOf(sl) < 0);
     if (!missing.length) return;
@@ -1372,4 +1380,104 @@ export function targetSummary(days: DayRev[], target: number | null): TargetSumm
     pct: t === null || avg === null ? null : (avg / t) * 100,
     best: best && best.rev > 0 ? best : null,
   };
+}
+
+
+/* ── Booking checklists ──────────────────────────────────────────────────────
+   Property-wide steps (set by an Admin on the property) plus one-off steps
+   added to a single booking, grouped by stage. Steps and ticks come from
+   logs.checklist (worker: checklistData).
+
+   Which property's steps a booking gets: the property the guest STAYS in —
+   a cross-unit booking follows the guest (stayPropOf), as the calendar does,
+   because rules like entry passes belong to the building.
+
+   Which bookings a property step applies to: "edits apply to upcoming
+   bookings". A step added after a booking had already checked out is not on
+   that booking; a step removed after a booking checked out stays on it. Any
+   step that was ticked always stays. The booking's end is its check-out day
+   (falling back to check-in, then the booking date).
+
+   Linked steps are never ticked by hand: 'ids' is done when every ID the
+   booking needs is uploaded (idSlotsOf — same rule as the IDs queue), and
+   'review' when the review was requested, received or deliberately skipped. */
+export type ChecklistStage = 'before' | 'checkin' | 'stay' | 'checkout';
+export const CHECKLIST_STAGES: { key: ChecklistStage; label: string }[] = [
+  { key: 'before', label: 'Before check-in' },
+  { key: 'checkin', label: 'Check-in' },
+  { key: 'stay', label: 'During stay' },
+  { key: 'checkout', label: 'Check-out' },
+];
+export const CHECKLIST_PRESETS: { key: string; label: string; stage: ChecklistStage; linked?: string }[] = [
+  { key: 'ids', label: 'Guest IDs collected', stage: 'checkin', linked: 'Ticks itself when every guest’s ID is uploaded.' },
+  { key: 'unit_details', label: 'Unit details shared', stage: 'before' },
+  { key: 'entry_pass', label: 'Entry passes created & sent', stage: 'before' },
+  { key: 'campaign', label: 'Campaign message shared', stage: 'stay' },
+  { key: 'review', label: 'Asked for review', stage: 'checkout', linked: 'Ticks itself when the review is marked requested.' },
+];
+export type ChecklistItemRow = {
+  id: number; property: string; booking_row: number; preset: string; label: string;
+  stage: ChecklistStage; sort: number; created_at: string; removed_at: string;
+};
+export type ChecklistTickRow = { booking_row: number; item_id: number; done_by: string; done_at: string };
+export type ChecklistData = { items: ChecklistItemRow[]; ticks: ChecklistTickRow[] };
+export type ChecklistEntry = {
+  id: number; label: string; stage: ChecklistStage; preset: string;
+  own: boolean;              // a one-off step on this booking (removable from the booking)
+  linked: string;            // '' = tick by hand; otherwise why it ticks itself
+  done: boolean; doneBy: string; doneAt: string;
+  note: string;              // e.g. '1 of 2 IDs uploaded'
+};
+
+const isoDay = (iso: string) => { const d = iso ? new Date(iso) : null; return d && !isNaN(d.getTime()) ? dayKeyOf(d) : ''; };
+const STAGE_ORDER: Record<string, number> = { before: 0, checkin: 1, stay: 2, checkout: 3 };
+
+/* Live property steps, in display order — the property's checklist as set up. */
+export function propertySteps(data: ChecklistData | null | undefined, property: string): ChecklistItemRow[] {
+  return ((data && data.items) || [])
+    .filter((it) => !it.booking_row && it.property === property && !it.removed_at)
+    .sort((a, b) => (STAGE_ORDER[a.stage] - STAGE_ORDER[b.stage]) || (a.sort - b.sort) || (a.id - b.id));
+}
+
+export function checklistFor(
+  o: { r: number; cells: any[] }, data: ChecklistData | null | undefined, have: Record<string, string[]> | null | undefined,
+): ChecklistEntry[] {
+  const c = o.cells;
+  if (!c || !data) return [];
+  const prop = stayPropOf(c);
+  const endKey = ciDayKey(c[21]) || ciDayKey(c[20]) || ciDayKey(c[0]);
+  const ticks = new Map<number, ChecklistTickRow>();
+  for (const t of data.ticks || []) if (t.booking_row === o.r) ticks.set(t.item_id, t);
+  const out: ChecklistEntry[] = [];
+  for (const it of data.items || []) {
+    const own = it.booking_row === o.r;
+    if (!own) {
+      if (it.booking_row || it.property !== prop) continue;
+      const tick = ticks.has(it.id);
+      const added = isoDay(it.created_at), removed = isoDay(it.removed_at);
+      const addedInTime = !endKey || !added || endKey >= added;
+      const stillOn = !removed || (!!endKey && endKey < removed);
+      if (!tick && !(addedInTime && stillOn)) continue;
+    }
+    const t = ticks.get(it.id);
+    let done = !!t, note = '', linked = '';
+    if (it.preset === 'ids') {
+      linked = CHECKLIST_PRESETS[0].linked as string;
+      const need = idSlotsOf(c), got = (have && have[String(o.r)]) || [];
+      const n = need.filter((sl) => got.indexOf(sl) >= 0).length;
+      done = n >= need.length;
+      note = n + ' of ' + need.length + ' ID' + (need.length === 1 ? '' : 's') + ' uploaded';
+    } else if (it.preset === 'review') {
+      linked = CHECKLIST_PRESETS[4].linked as string;
+      const rs = reviewStatusOf(c);
+      done = rs !== 'pending';
+      note = rs === 'pending' ? 'Not asked yet' : 'Review ' + rs;
+    }
+    out.push({
+      id: it.id, label: it.label, stage: it.stage, preset: it.preset, own, linked, done,
+      doneBy: t ? t.done_by : '', doneAt: t ? t.done_at : '', note,
+    });
+  }
+  return out.sort((a, b) =>
+    (STAGE_ORDER[a.stage] - STAGE_ORDER[b.stage]) || (Number(a.own) - Number(b.own)) || (a.id - b.id));
 }

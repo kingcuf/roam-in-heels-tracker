@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { PanResponder, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { C, F, inr } from '../theme';
 import { Btn, Sheet } from '../ui';
+import { BookingChecklist } from '../checklist';
 import { useStore } from '../store';
 import { addMonth, fmtDayKey, monthTitle } from '../calendar';
 import { Stay, ciFmtDay, computeStays, dayKeyOf, keyToDate, nightsInRange, thisMonthIso, todayIso } from '../logic';
@@ -526,6 +527,8 @@ function StayDetail({ x, onEdit }: { x: Stay; onEdit: () => void }) {
       <Row label="Net earning" value={inr(x.net)} tone={C.green} />
       <Row label="Awaiting payout" value={x.pending > 0 ? inr(x.pending) : '—'} tone={x.pending > 0 ? C.red : C.muted} />
       {x.notes ? <Row label="Notes" value={x.notes} /> : null}
+
+      <BookingChecklist row={x.row} />
 
       <Btn title="Edit this booking" onPress={onEdit} style={{ marginTop: 16 }} />
     </View>

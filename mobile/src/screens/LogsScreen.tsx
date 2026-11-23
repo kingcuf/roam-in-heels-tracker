@@ -4,6 +4,7 @@ import { C, F } from '../theme';
 import { useStore } from '../store';
 import { Btn, Panel, SearchInput, Sheet, useToast } from '../ui';
 import { LogBlock, parseExtraGuests } from '../logic';
+import { BookingChecklist } from '../checklist';
 
 const PER_PAGE = 50;
 const COL_W = 110;
@@ -233,6 +234,7 @@ export default function LogsScreen({ which, embedded }: { which: 'blog' | 'elog'
               <Text style={st.pLbl}>Row ID</Text>
               <Text style={[st.pVal, { color: C.muted }]}>{preview.r}</Text>
             </View>
+            {which === 'blog' ? <BookingChecklist row={preview.r} /> : null}
             {canChange ? (
               <Btn
                 title={s.needsApproval ? 'Request a change' : 'Edit this ' + kind}

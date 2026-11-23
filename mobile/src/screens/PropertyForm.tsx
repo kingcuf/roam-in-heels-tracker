@@ -7,6 +7,7 @@ import { FormCard, FormFooter, FormHeader, FormScroll } from '../formkit';
 import { Field, TxtInput, SelectField, DateField } from '../fields';
 import { api } from '../api';
 import TicketBanner, { NoAdd, writeLabels } from './TicketBanner';
+import { PropertyChecklistEditor } from '../checklist';
 
 const EMPTY = { name: '', id: '', location: '', type: '', status: 'Active', onboarded: '', rent: '', notes: '' };
 
@@ -159,6 +160,15 @@ export default function PropertyForm() {
         <FormCard title="Notes" step={3} i={3}>
         <Field label="Notes"><TxtInput value={f.notes} onChange={set('notes')} /></Field>
         </FormCard>
+        {/* The property's booking checklist. Saved step by step as it is
+            edited (not with the form's Save), and keyed by the stored name, so
+            it is only offered on a property that already exists. */}
+        {editing && s.me?.role === 'Admin' && s.editP?.prop?.name ? (
+          <FormCard title="Booking checklist" step={4} i={4}
+            note="What the property manager works through for every booking here. Changes apply to upcoming bookings straight away.">
+            <PropertyChecklistEditor property={String(s.editP.prop.name)} />
+          </FormCard>
+        ) : null}
       <FormFooter
         title={editing ? 'Edit Property' : resub ? 'Edit Request' : 'Add Property'}
         showSave={editing ? can.upd : can.add}

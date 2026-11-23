@@ -106,6 +106,12 @@ export const api = {
   getDashboard: (pin: string, property: string, from: string, to: string) =>
     call('dashboard', { pin, property, from, to }),
   getProperties: (pin: string) => call('properties', { pin }),
+  /* Booking checklists. Steps and ticks ride along on getLogs() as logs.checklist. */
+  addChecklistItem: (pin: string, d: { scope: 'property' | 'booking'; property?: string; row?: number; preset?: string; label?: string; stage?: string }) =>
+    call('addChecklistItem', { pin, payload: d }),
+  removeChecklistItem: (pin: string, id: number) => call('removeChecklistItem', { pin, payload: { id } }),
+  tickChecklist: (pin: string, row: number, item: number, done: boolean) =>
+    call('tickChecklist', { pin, row, payload: { item, done } }),
   /* Daily revenue targets, keyed by Report scope ('All' or a property name).
      daily = null removes the target for that scope. Admin only to set. */
   getTargets: (pin: string) =>
