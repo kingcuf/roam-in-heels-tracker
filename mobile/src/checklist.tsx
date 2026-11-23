@@ -252,37 +252,40 @@ export function NewBookingSteps({ property, extras, onChange }: {
   property: string; extras: ExtraStep[]; onChange: (x: ExtraStep[]) => void;
 }) {
   const s = useStore();
+  const [adding, setAdding] = useState(false);
   const steps = propertySteps(s.logs?.checklist, property);
+  /* One plain list in the order the work happens; the stage is a quiet tag
+     on the right, not a heading. Adding a one-off step stays folded away. */
+  const rows = [
+    ...steps.map((x) => ({ label: x.label, stage: x.stage, i: -1 })),
+    ...extras.map((x, i) => ({ label: x.label, stage: x.stage, i })),
+  ];
+  const order = (k: string) => CHECKLIST_STAGES.findIndex((x) => x.key === k);
+  rows.sort((a, b) => order(a.stage) - order(b.stage));
   return (
     <View>
       {!property ? <Text style={st.empty}>Pick a property to see its checklist.</Text>
-        : steps.length === 0 ? <Text style={st.empty}>{property + ' has no checklist set up.'}</Text>
-        : CHECKLIST_STAGES.map((sg) => {
-            const list = steps.filter((x) => x.stage === sg.key);
-            if (!list.length) return null;
-            return (
-              <Text key={sg.key} style={st.preview}>
-                <Text style={st.previewStage}>{sg.label}: </Text>{list.map((x) => x.label).join(' · ')}
-              </Text>
-            );
-          })}
-      {extras.length > 0 && <Text style={[st.stage, { marginTop: 10 }]}>Only for this booking</Text>}
-      {extras.map((x, i) => (
-        <View key={i} style={st.item}>
-          <View style={st.itemMain}>
-            <View style={st.dot} />
-            <View style={{ flex: 1 }}>
-              <Text style={st.label}>{x.label}</Text>
-              <Text style={st.sub}>{stageLabel(x.stage)}</Text>
-            </View>
-          </View>
-          <TouchableOpacity onPress={() => onChange(extras.filter((_, j) => j !== i))} hitSlop={10} accessibilityLabel="Remove step">
-            <Text style={st.x}>×</Text>
-          </TouchableOpacity>
+        : !rows.length ? <Text style={st.empty}>{property + ' has no checklist set up.'}</Text> : null}
+      {rows.map((x, k) => (
+        <View key={k} style={[st.pvRow, k === rows.length - 1 && { borderBottomWidth: 0 }]}>
+          <View style={st.pvBox} />
+          <Text style={st.pvLabel} numberOfLines={2}>{x.label}</Text>
+          <Text style={st.pvStage}>{stageLabel(x.stage)}</Text>
+          {x.i >= 0 ? (
+            <TouchableOpacity onPress={() => onChange(extras.filter((_, j) => j !== x.i))} hitSlop={10} accessibilityLabel="Remove step">
+              <Text style={st.x}>×</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
       ))}
-      <AddStep placeholder="Add a step just for this booking (optional)"
-        onAdd={(label, stage) => { onChange([...extras, { label, stage }]); return true; }} />
+      {adding ? (
+        <AddStep placeholder="Step just for this booking"
+          onAdd={(label, stage) => { onChange([...extras, { label, stage }]); setAdding(false); return true; }} />
+      ) : property ? (
+        <TouchableOpacity onPress={() => setAdding(true)} hitSlop={8} style={{ marginTop: 10, alignSelf: 'flex-start' }}>
+          <Text style={st.link}>+ Add a step for this booking</Text>
+        </TouchableOpacity>
+      ) : null}
     </View>
   );
 }
@@ -329,4 +332,8 @@ const st = StyleSheet.create({
   presetSub: { fontFamily: F.med, fontSize: 11, color: C.muted, marginTop: 1 },
   preview: { fontFamily: F.med, fontSize: 13, color: C.ink, marginTop: 6, lineHeight: 19 },
   previewStage: { fontFamily: F.bold, color: C.blue2 },
+  pvRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: C.hair },
+  pvBox: { width: 18, height: 18, borderRadius: 5, borderWidth: 1.5, borderColor: C.line, backgroundColor: '#fff' },
+  pvLabel: { flex: 1, fontFamily: F.semi, fontSize: 14, color: C.ink },
+  pvStage: { fontFamily: F.med, fontSize: 11.5, color: C.muted },
 });

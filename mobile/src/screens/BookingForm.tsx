@@ -590,7 +590,7 @@ export default function BookingForm() {
             saves tick by tick rather than with this form's Save. */}
         {s.logs?.checklist ? (
           <FormCard title="Checklist" step={7} i={7}
-            note={editing ? 'Saved as you tick — not part of “Save changes”.' : 'Steps the property manager will work through for this booking.'}>
+            note={editing ? 'Saved as you tick — not part of “Save changes”.' : undefined}>
             {editing && s.editB
               ? <BookingChecklist row={s.editB.row} bare />
               : <NewBookingSteps property={ownedPropertyName(s.props, f.stayUnit) || f.property} extras={steps} onChange={setSteps} />}
