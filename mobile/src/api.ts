@@ -106,6 +106,12 @@ export const api = {
   getDashboard: (pin: string, property: string, from: string, to: string) =>
     call('dashboard', { pin, property, from, to }),
   getProperties: (pin: string) => call('properties', { pin }),
+  /* Daily revenue targets, keyed by Report scope ('All' or a property name).
+     daily = null removes the target for that scope. Admin only to set. */
+  getTargets: (pin: string) =>
+    call('targets', { pin }) as Promise<{ targets: Record<string, { daily: number; updatedAt: string; updatedBy: string }> }>,
+  setTarget: (pin: string, scope: string, daily: number | null) =>
+    call('setTarget', { pin, payload: { scope, daily } }),
   /* `ticket` is only sent when resubmitting a new-record request that was sent
      back: a record that does not exist yet cannot be found by row id. */
   addBooking: (pin: string, d: any, ticket = 0) => call('addBooking', { pin, payload: d, ticket }),

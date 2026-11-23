@@ -61,6 +61,8 @@ function parseOverride(raw) {
    to even ask. */
 export const ACTION_RIGHTS = {
   dashboard: 'reports.view',
+  /* Reading needs the Report; setting is further limited to Admins in setTarget(). */
+  targets: 'reports.view', setTarget: 'reports.view',
   addBooking: 'booking.add', updateBooking: 'booking.update', deleteBooking: 'booking.delete',
   addExpense: 'expense.add', updateExpense: 'expense.update', deleteExpense: 'expense.delete',
   addSaving: 'saving.add', updateSaving: 'saving.update', deleteSaving: 'saving.delete',

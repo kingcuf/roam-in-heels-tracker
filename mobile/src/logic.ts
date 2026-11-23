@@ -1281,3 +1281,90 @@ export function fmtEnquiryWhen(s: string): string {
   }
   return out;
 }
+
+/* ── Daily revenue vs target ─────────────────────────────────────────────────
+   Two ways to put a booking's money on a calendar day, and they answer
+   different questions:
+     * 'booked' — the whole net lands on the Booking Date (col A). "How much
+       business did we close today?" Same basis as the Calendar's earnings and
+       the server's Total Revenue card.
+     * 'stay'   — the net is spread evenly over the nights the guest stays,
+       check-in (col U) up to but not including check-out (col V). "How much did
+       the flats earn today?" A booking with no check-out, or one that checks
+       out the day it checks in (a Pass), puts its whole net on check-in day.
+       A booking with no check-in date cannot be placed at all; it is counted
+       in `unplaced` so the screen can say so rather than quietly dropping it.
+   Money follows the cross-unit split exactly as everywhere else
+   (scopeBooking), and only rows with a Booking ID count — the same rule as the
+   server's revenue KPI and the Calendar, so the figures agree with both. */
+export type RevBasis = 'booked' | 'stay';
+export type DayRev = { key: string; rev: number; n: number };
+export type RevByDay = { days: Record<string, DayRev>; unplaced: number; unplacedAmt: number };
+
+/* Local-calendar day arithmetic on a Date (addDays above works on day keys).
+   new Date(y, m, d + i) rather than adding 86 400 000 ms, which lands on the
+   wrong day across a DST change. */
+export const shiftDay = (dt: Date, i: number) => new Date(dt.getFullYear(), dt.getMonth(), dt.getDate() + i);
+
+export function revenueByDay(block: LogBlock | null, filter: string, basis: RevBasis): RevByDay {
+  const days: Record<string, DayRev> = {};
+  let unplaced = 0, unplacedAmt = 0;
+  const add = (k: string, v: number) => {
+    const d = (days[k] = days[k] || { key: k, rev: 0, n: 0 });
+    d.rev += v; d.n++;
+  };
+  for (const o of (block && block.rows) || []) {
+    const c = o.cells;
+    if (!c || !c[18]) continue;
+    const sc = scopeBooking(c, filter);
+    if (!sc) continue;
+    const net = sc.share(ciNum(c[9]));
+    if (basis === 'booked') {
+      const k = ciDayKey(c[0]);
+      if (k) add(k, net); else { unplaced++; unplacedAmt += net; }
+      continue;
+    }
+    const inD = ciParse(c[20]);
+    if (!inD) { unplaced++; unplacedAmt += net; continue; }
+    const outD = ciParse(c[21]);
+    const nights = outD ? Math.round((outD.getTime() - inD.getTime()) / 86400000) : 0;
+    if (nights <= 0) { add(dayKeyOf(inD), net); continue; }
+    const per = net / nights;
+    for (let i = 0; i < nights; i++) add(dayKeyOf(shiftDay(inD, i)), per);
+  }
+  return { days, unplaced, unplacedAmt };
+}
+
+/* The run of `count` consecutive days ending on `end`, oldest first, with
+   empty days present as zero — a day nobody booked is a day that missed. */
+export function dayWindow(by: RevByDay, end: Date, count: number): DayRev[] {
+  const out: DayRev[] = [];
+  for (let i = count - 1; i >= 0; i--) {
+    const k = dayKeyOf(shiftDay(end, -i));
+    out.push(by.days[k] ? { ...by.days[k] } : { key: k, rev: 0, n: 0 });
+  }
+  return out;
+}
+
+/* Summary over complete days only. `target` null/0 = no target set: the hit
+   count and gap are then null rather than a misleading 0. */
+export type TargetSummary = {
+  n: number; total: number; avg: number | null;
+  hit: number | null; gap: number | null; pct: number | null;
+  best: DayRev | null;
+};
+export function targetSummary(days: DayRev[], target: number | null): TargetSummary {
+  const n = days.length;
+  const total = days.reduce((a, d) => a + d.rev, 0);
+  const avg = n ? total / n : null;
+  const t = target && target > 0 ? target : null;
+  let best: DayRev | null = null;
+  for (const d of days) if (!best || d.rev > best.rev) best = d;
+  return {
+    n, total, avg,
+    hit: t === null ? null : days.filter((d) => d.rev >= t).length,
+    gap: t === null ? null : total - t * n,
+    pct: t === null || avg === null ? null : (avg / t) * 100,
+    best: best && best.rev > 0 ? best : null,
+  };
+}

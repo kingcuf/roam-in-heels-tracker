@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { View, Text, LayoutChangeEvent } from 'react-native';
+import { View, Text, LayoutChangeEvent, Pressable } from 'react-native';
 import Svg, { Rect, Path, Line, Text as SvgText, Circle } from 'react-native-svg';
 import { C, F, groupINR } from './theme';
-import { CI_MON } from './logic';
+import { CI_MON, DayRev } from './logic';
 
 const H = 220;
 const PAD = { l: 44, r: 8, t: 10, b: 26 };
@@ -145,6 +145,186 @@ export function BankChart({ dayMap }: { dayMap: Record<string, number> }) {
           Latest: ₹{groupINR(pts[pts.length - 1].v)}
         </Text>
       )}
+    </View>
+  );
+}
+
+/* ── Daily revenue vs target ─────────────────────────────────────────────────
+   Bars are days, the dashed line is the target, the dotted line the average.
+   Built to be READ on a phone, not admired:
+     * a bar is green when the day met the target and gold when it fell short,
+       so the verdict is legible before any number is;
+     * the target and average values sit ON THE AXIS, in the margin, as tags —
+       a label inside the plot always ends up covering somebody's bar;
+     * up to 10 bars carry their value on top; at 30 the labels would collide,
+       so only the tapped bar does;
+     * every bar's whole column is the tap target (not the bar, which can be a
+       2 px sliver on a slow day). Nothing is dimmed until a bar is tapped, and
+       the tapped day is reported below the chart by the caller rather than in
+       a floating tooltip a thumb covers;
+     * today is drawn faded and outlined: it is not over yet. */
+export const kShort = (v: number) => {
+  const a = Math.abs(v), sg = v < 0 ? '-' : '';
+  if (a >= 100000) return sg + '₹' + (a / 100000).toFixed(a >= 1000000 ? 0 : 1).replace(/\.0$/, '') + 'L';
+  if (a >= 1000) return sg + '₹' + (a / 1000).toFixed(a >= 10000 ? 0 : 1).replace(/\.0$/, '') + 'k';
+  return sg + '₹' + Math.round(a);
+};
+const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const keyDate = (k: string) => { const p = k.split('-'); return new Date(+p[0], +p[1] - 1, +p[2]); };
+/* SVG text does not inherit the app font; on the web it fell back to Times. */
+const SF = F.semi, SFB = F.xbold;
+
+export function TargetChart({ days, today, target, avg, selected, onSelect }: {
+  days: DayRev[]; today: DayRev | null; target: number | null; avg: number | null;
+  selected: string | null; onSelect: (key: string) => void;
+}) {
+  const [w, onLayout] = useWidth();
+  const all = today ? [...days, today] : days;
+  const N = all.length || 1;
+  const dense = N > 10;
+  const CH = 236;
+  const P = { l: 48, r: 6, t: 20, b: dense ? 22 : 34 };
+  const plotW = Math.max(0, w - P.l - P.r);
+  const plotH = CH - P.t - P.b;
+  const t = target && target > 0 ? target : null;
+  const max = niceMax(Math.max(1, ...all.map((d) => d.rev), t ? t * 1.12 : 0, avg || 0));
+  const Y = (v: number) => P.t + plotH * (1 - Math.max(0, v) / max);
+  const slot = plotW / N;
+  const bw = Math.max(3, Math.min(34, slot * 0.62));
+  const colorOf = (d: DayRev) => (t === null ? C.navy : d.rev >= t ? C.green : C.copper);
+  const selIdx = selected === null ? -1 : all.findIndex((d) => d.key === selected);
+
+  const yT = t !== null ? Y(t) : null;
+  const yA = avg !== null && avg > 0 ? Y(avg) : null;
+  /* Axis tags: the target wins its spot; the average moves off it when the two
+     would overlap, and any grid value they would cover is hidden. */
+  let yATag = yA;
+  if (yT !== null && yA !== null && Math.abs(yT - yA) < 16) yATag = yA >= yT ? yT + 16 : yT - 16;
+  const tagged = [yT, yATag].filter((v): v is number => v !== null);
+  const gridHidden = (y: number) => tagged.some((ty) => Math.abs(ty - y) < 12);
+
+  /* X labels. Dense: every few days, plus today; a tapped day takes its
+     neighbours' places so two labels never print over each other. */
+  const every = dense ? Math.ceil(N / 6) : 1;
+  let labelled = new Set<number>();
+  all.forEach((_, i) => { if (i % every === 0) labelled.add(i); });
+  if (today) labelled.add(N - 1);
+  if (dense) {
+    /* the last periodic label must not crowd today's */
+    if (today) for (let i = N - 2; i >= N - 3; i--) labelled.delete(i);
+    if (selIdx >= 0) {
+      labelled = new Set([...labelled].filter((i) => Math.abs(i - selIdx) > 2));
+      labelled.add(selIdx);
+    }
+  }
+
+  const Tag = ({ y, txt, fill, fg }: { y: number; txt: string; fill: string; fg: string }) => (
+    <>
+      <Rect x={1} y={y - 8} width={P.l - 5} height={16} rx={8} fill={fill} />
+      <SvgText x={1 + (P.l - 5) / 2} y={y + 3.5} fontSize={9.5} fontFamily={SFB} fill={fg} textAnchor="middle">{txt}</SvgText>
+    </>
+  );
+
+  return (
+    <View onLayout={onLayout}>
+      {w > 0 && (
+        <View style={{ width: w, height: CH }}>
+          <Svg width={w} height={CH}>
+            {[0, 0.25, 0.5, 0.75, 1].map((f, i) => {
+              const y = P.t + plotH * (1 - f);
+              return (
+                <React.Fragment key={i}>
+                  <Line x1={P.l} y1={y} x2={w - P.r} y2={y} stroke={C.hair} strokeWidth={1} />
+                  {!gridHidden(y) && (
+                    <SvgText x={P.l - 7} y={y + 3.5} fontSize={9.5} fontFamily={SF} fill={C.muted} textAnchor="end">{kShort(max * f)}</SvgText>
+                  )}
+                </React.Fragment>
+              );
+            })}
+            {all.map((d, i) => {
+              const isToday = !!today && i === N - 1;
+              const x = P.l + slot * i + (slot - bw) / 2;
+              const h = Math.max(0, (Math.max(0, d.rev) / max) * plotH);
+              const isSel = i === selIdx;
+              const dim = selIdx >= 0 && !isSel;
+              const showVal = d.rev > 0 && (!dense || isSel);
+              const dt = keyDate(d.key);
+              const lblColor = isSel ? C.ink : C.muted, lblFont = isSel ? SFB : SF;
+              return (
+                <React.Fragment key={d.key}>
+                  {h > 0 && (
+                    <Rect
+                      x={x} y={P.t + plotH - h} width={bw} height={h} rx={Math.min(5, bw / 3)}
+                      fill={colorOf(d)} opacity={(isToday ? 0.4 : 1) * (dim ? 0.5 : 1)}
+                      stroke={isToday || isSel ? (isSel ? C.ink : colorOf(d)) : 'none'}
+                      strokeWidth={isSel ? 1.5 : isToday ? 1.2 : 0}
+                      strokeDasharray={isToday && !isSel ? '3,2' : undefined}
+                    />
+                  )}
+                  {/* a zero day still shows where it is when tapped */}
+                  {h === 0 && isSel && <Rect x={x} y={P.t + plotH - 2} width={bw} height={2} fill={C.ink} />}
+                  {showVal && (
+                    <SvgText
+                      x={x + bw / 2} y={P.t + plotH - h - 5} fontSize={dense ? 10.5 : 9.5} fontFamily={SFB}
+                      fill={dim ? C.muted : C.ink} textAnchor="middle"
+                    >{kShort(d.rev)}</SvgText>
+                  )}
+                  {labelled.has(i) && (
+                    dense ? (
+                      <SvgText x={x + bw / 2} y={CH - 7} fontSize={9.5} fontFamily={lblFont} fill={lblColor}
+                        textAnchor={i === N - 1 ? 'end' : i === 0 ? 'start' : 'middle'}>
+                        {isToday ? 'Today' : dt.getDate() + ' ' + CI_MON[dt.getMonth()]}
+                      </SvgText>
+                    ) : (
+                      <>
+                        <SvgText x={x + bw / 2} y={CH - 20} fontSize={9.5} fontFamily={lblFont} fill={lblColor} textAnchor="middle">
+                          {isToday ? 'Today' : WD[dt.getDay()]}
+                        </SvgText>
+                        <SvgText x={x + bw / 2} y={CH - 7} fontSize={9.5} fontFamily={lblFont} fill={lblColor} textAnchor="middle">
+                          {dt.getDate() + ' ' + CI_MON[dt.getMonth()]}
+                        </SvgText>
+                      </>
+                    )
+                  )}
+                </React.Fragment>
+              );
+            })}
+            {yA !== null && <Line x1={P.l} y1={yA} x2={w - P.r} y2={yA} stroke={C.blue} strokeWidth={1.5} strokeDasharray="2,3" />}
+            {yT !== null && <Line x1={P.l} y1={yT} x2={w - P.r} y2={yT} stroke={C.ink} strokeWidth={1.6} strokeDasharray="6,4" />}
+            {yATag !== null && <Tag y={yATag} txt={kShort(avg as number)} fill={C.amberbg} fg={C.blue2} />}
+            {yT !== null && <Tag y={yT} txt={kShort(t as number)} fill={C.ink} fg="#fff" />}
+          </Svg>
+          {all.map((d, i) => (
+            <Pressable
+              key={d.key} onPress={() => onSelect(d.key)}
+              accessibilityRole="button"
+              accessibilityLabel={(today && i === N - 1 ? 'Today, so far' : d.key) + ': ' + kShort(d.rev)}
+              style={{ position: 'absolute', left: P.l + slot * i, top: 0, width: slot, height: CH }}
+            />
+          ))}
+        </View>
+      )}
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', columnGap: 14, rowGap: 6, justifyContent: 'center', marginTop: 8 }}>
+        {t !== null ? (
+          <>
+            <LegendDot color={C.green} label="Met target" />
+            <LegendDot color={C.copper} label="Below target" />
+            <LegendLine color={C.ink} dash label="Target" />
+          </>
+        ) : <LegendDot color={C.navy} label="Revenue" />}
+        {yA !== null ? <LegendLine color={C.blue} label="Average" /> : null}
+      </View>
+    </View>
+  );
+}
+
+function LegendLine({ color, label, dash }: { color: string; label: string; dash?: boolean }) {
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+      <Svg width={16} height={6}>
+        <Line x1={0} y1={3} x2={16} y2={3} stroke={color} strokeWidth={2} strokeDasharray={dash ? '5,3' : '2,2.5'} />
+      </Svg>
+      <Text style={{ fontSize: 11, color: C.bark }}>{label}</Text>
     </View>
   );
 }

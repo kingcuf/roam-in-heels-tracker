@@ -14,6 +14,7 @@ import {
 } from '../ui';
 import { SelectField, DateField } from '../fields';
 import { BankChart } from '../charts';
+import RevenueTarget from './RevenueTarget';
 
 type Drill =
   | { kind: 'metric'; metric: string }
@@ -204,6 +205,11 @@ export default function Dashboard() {
           {canBk && <KpiCard kind="bkg" label="Bookings" value={m.bookings} onPress={() => setDrill({ kind: 'metric', metric: 'mbookings' })} />}
         </View>
         </>}
+
+        {/* Daily revenue against the target. Its own window (7 / 30 days / this
+            month) rather than the Range above: a target is judged day by day,
+            and "All time" has no meaningful daily average to compare. */}
+        {canMoney && <RevenueTarget />}
 
         {/* cash position */}
         {canCash && <>

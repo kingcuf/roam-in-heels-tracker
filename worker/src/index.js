@@ -261,6 +261,8 @@ export default {
         case 'setRoleRights':  out = await setRoleRights(env, payload); break;
         case 'changePin':      out = await changePin(env, me, payload); break;
         case 'dashboard':      out = redactDashboard(await getDashboard(env, pin, p.property, p.from, p.to), me); break;
+        case 'targets':        out = await getTargets(env); break;
+        case 'setTarget':      out = await setTarget(env, me, payload); break;
         case 'properties':     out = await getProperties(env, pin); break;
         case 'addBooking':     out = await addBooking(env, pin, payload); break;
         case 'addExpense':     out = await addExpense(env, pin, payload); break;
@@ -1027,6 +1029,41 @@ async function setEnquiryStatus(env, row, d) {
   const res = await env.DB.prepare(`UPDATE enquiries SET ${sets.join(', ')} WHERE id = ?`).bind(...vals, row).run();
   if (!res.meta.changes) bad('Enquiry not found');
   return { ok: true, message: 'Enquiry marked ' + st };
+}
+
+/* ─────────────── REVENUE TARGETS ───────────────
+   A daily ₹ target per Report scope ('All' or a property name). Anyone who can
+   open the Report may read them; only an Admin may set one. Not an approval
+   ticket: a target is a goal, not a record in the books, and it changes no
+   figure anywhere. */
+async function getTargets(env) {
+  const r = await env.DB.prepare('SELECT scope, daily, updated_at, updated_by FROM revenue_targets').all();
+  const targets = {};
+  for (const x of r.results || []) {
+    targets[x.scope] = { daily: num(x.daily), updatedAt: x.updated_at, updatedBy: x.updated_by };
+  }
+  return { targets };
+}
+async function setTarget(env, me, d) {
+  if (!me.isAdmin) bad('Only an Admin can set the revenue target');
+  const scope = clip(d.scope, 120);
+  if (!scope) bad('Missing target scope');
+  if (scope !== 'All') {
+    const p = await env.DB.prepare('SELECT 1 FROM properties WHERE name = ?').bind(scope).first();
+    if (!p) bad('Unknown property: ' + scope);
+  }
+  /* Blank means "remove the target", not "target of ₹0". */
+  if (d.daily === null || d.daily === undefined || String(d.daily).trim() === '') {
+    await env.DB.prepare('DELETE FROM revenue_targets WHERE scope = ?').bind(scope).run();
+    return { ok: true, message: 'Target removed' };
+  }
+  const daily = Number(d.daily);
+  if (!isFinite(daily) || daily <= 0 || daily > 1e8) bad('The target must be a positive amount');
+  await env.DB.prepare(
+    `INSERT INTO revenue_targets (scope, daily, updated_at, updated_by) VALUES (?, ?, ?, ?)
+     ON CONFLICT(scope) DO UPDATE SET daily = excluded.daily, updated_at = excluded.updated_at, updated_by = excluded.updated_by`
+  ).bind(scope, Math.round(daily), new Date().toISOString(), me.username).run();
+  return { ok: true, message: 'Target saved' };
 }
 
 /* ─────────────── REVIEW FOLLOW-UPS ───────────────

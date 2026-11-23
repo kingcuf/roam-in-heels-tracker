@@ -61,7 +61,7 @@ const PIN_KEY = 'spira_pin';     // pre-username installs saved only the owner P
    the website every call threw, nothing was saved, and each page refresh
    signed the user out. The browser gets localStorage instead — the same trust
    level as the signed-in tab itself; phones keep the Keychain/Keystore. */
-const authStore = Platform.OS === 'web'
+export const authStore = Platform.OS === 'web'
   ? {
       getItemAsync: async (k: string) => { try { return globalThis.localStorage?.getItem(k) ?? null; } catch { return null; } },
       setItemAsync: async (k: string, v: string) => { try { globalThis.localStorage?.setItem(k, v); } catch {} },
