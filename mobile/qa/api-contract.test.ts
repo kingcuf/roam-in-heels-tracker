@@ -322,7 +322,9 @@ eq('TASK_COLS[3] is done',                                         TASK_COLS[3],
      stale until a manual ↻. Harmless for setPayouts (getDashboard never reads
      pending_amount) but wrong for anything that moves a booking. */
   eq('PINNED reloadLogs does not refresh dash', fnBody(StoreSrc, 'const reloadLogs = async').includes('setDash'), false);
-  eq('PINNED …and the header stamp comes from dash', /s\.dash\?\.generatedAt/.test(read('App.tsx')), true);
+  /* The home header's "updated …" stamp was removed (24-Nov-2026, owner's
+     call), so the stale-stamp half of this no longer applies. */
+  eq('header no longer shows the dash "updated" stamp', /s\.dash\?\.generatedAt/.test(read('App.tsx')), false);
   /* reloadInv skips the busy counter, so an inventory write shows no spinner. */
   eq('PINNED reloadInv does not touch the busy counter', fnBody(StoreSrc, 'const reloadInv = async').includes('inc()'), false);
   /* editB holds a CELLS SNAPSHOT taken when the row was tapped, and the Add
