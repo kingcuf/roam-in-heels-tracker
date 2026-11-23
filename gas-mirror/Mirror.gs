@@ -1,30 +1,59 @@
 /**
- * SPIRA TRACKER — sheet mirror receiver.
+ * ROAM IN HEELS — sheet mirror receiver.
  *
- * After the migration to Cloudflare D1, the database is the source of truth and
- * these spreadsheets are a read-only view. The Worker's cron job POSTs a full
- * snapshot here once a day and this rewrites the data tabs in place.
+ * The Cloudflare D1 database is the source of truth; this spreadsheet is a
+ * read-only copy. The Worker's nightly cron job (and the `mirrorNow` action)
+ * POSTs a full snapshot here and this rewrites the data tabs.
  *
- * ⚠️  ONE-WAY. Anything typed into the mirrored tabs by hand is overwritten on
- *     the next run. Enter data through the app, not the sheet.
+ * ⚠️  ONE-WAY. Anything typed into the mirrored tabs is overwritten on the next
+ *     run. Enter data through the app, not the sheet.
  *
- * Deploy as a SEPARATE Apps Script project (or a separate deployment) from the
- * old read/write API:
- *   Deploy ▸ New deployment ▸ Web app ▸ Execute as: Me ▸ Who has access: Anyone
- * then set the /exec URL and the shared secret on the Worker:
- *   npx wrangler secret put MIRROR_URL
- *   npx wrangler secret put MIRROR_SECRET
+ * SETUP (once):
+ *   1. Create a Google Sheet. Extensions ▸ Apps Script. Replace Code.gs with
+ *      this file. Save.
+ *   2. Deploy ▸ New deployment ▸ ⚙ Web app ▸ Execute as: Me ▸ Who has access:
+ *      Anyone ▸ Deploy (authorise when asked). Copy the /exec URL.
+ *   3. Plant the shared secret once: open  <exec URL>?init=<MIRROR_SECRET>
+ *      (only works while no secret is set — see doGet), then on the Worker:
+ *        npx wrangler secret put MIRROR_URL      # the /exec URL
+ *        npx wrangler secret put MIRROR_SECRET   # the same secret
  *
- * The secret must match on both sides — "Anyone" access means the URL alone is
- * otherwise enough to overwrite your sheets.
+ * The script is BOUND to the sheet it was created from and writes only there —
+ * no spreadsheet ids in code. Tabs are created on first run. Every block is
+ * sized from the data, so a column added to the database cannot make the
+ * write fail on a width mismatch (the previous mirror hard-coded 26 booking
+ * columns and broke when a 27th was added).
  */
 
-const PNL_SPREADSHEET_ID = '1QO8wQqKENFWqmRtc0Lwc1iSHIhMnhwA-6j4k-nS4t2Y';
-const IMS_SPREADSHEET_ID = '14JAEgwyN3Zr7DrohWviRC0rHovSJ8BERM-kaSaSozxI';
+/* Column headers for each tab, in the order the Worker sends them
+   (worker/src/mirror.js). A header list shorter than the data is padded with
+   the column number, so new columns still land, just unnamed. */
+const HEADERS = {
+  'Bookings': ['Booking Date', 'Property', 'Lead Guest', 'Type', 'Channel', 'Referrer',
+    'List Price', 'Discount', 'Guest Paid', 'Net Earned', 'Commission Paid', 'Pending Amount',
+    'Notes', 'Phone', 'Lead Birth Yr', 'Co-guest', 'Co-guest Birth Yr', 'Guests', 'Booking ID',
+    'Month', 'Check-in Date', 'Check-out Date', 'Check-in Time', 'Check-out Time', 'Stay Unit',
+    'Repeat', 'Review Status'],
+  'Expenses': ['Txn Date', 'Expense Month', 'Item', 'Property', 'Category', 'Qty', 'Amount', 'Type',
+    'Status', 'Refundable', 'Vendor', 'Notes', 'Initial Investment'],
+  'Savings': ['Date', 'Amount', 'Scheme', 'Platform', 'Status', 'Returns Received', 'Notes / Ref No',
+    'Created At'],
+  'Properties': ['ID', 'Name', 'Location', 'Type', 'Status', 'Onboarded', 'Rent', 'Notes'],
+  'Inventory Items': ['Item ID', 'Property', 'Category', 'Item', 'Type', 'Required Qty',
+    'Reorder Level', 'Unit Price', 'Vendor', 'Remarks'],
+  'Stock Log': ['Date', 'Item Key', 'Movement', 'Qty', 'Unit Cost', 'Vendor', 'Logged By', 'Remarks'],
+};
 
-/* Set this to the same value passed to `wrangler secret put MIRROR_SECRET`.
-   Stored in Script Properties rather than inline so the secret is not in code:
-   Project Settings ▸ Script Properties ▸ add MIRROR_SECRET. */
+/* Header names whose values must stay literal text: a booking Month like
+   'May 2026' is otherwise read as 1-May, an item id 'DEC-04' as 4-Dec, and a
+   phone '+91…' as a formula. */
+const TEXT_COLS = ['Phone', 'Month', 'Booking ID', 'Item ID', 'Item Key', 'Stay Unit'];
+
+function sheet_() {
+  const id = PropertiesService.getScriptProperties().getProperty('SHEET_ID');
+  return id ? SpreadsheetApp.openById(id) : SpreadsheetApp.getActiveSpreadsheet();
+}
+
 function mirrorSecret_() {
   return PropertiesService.getScriptProperties().getProperty('MIRROR_SECRET');
 }
@@ -37,40 +66,64 @@ function doPost(e) {
     if (String(body.secret) !== String(expected)) throw new Error('Unauthorized');
 
     const s = body.snapshot || {};
+    const ss = sheet_();
     const counts = {};
-    const pnl = SpreadsheetApp.openById(PNL_SPREADSHEET_ID);
-    const ims = SpreadsheetApp.openById(IMS_SPREADSHEET_ID);
-
-    /* PnL tabs hold no formulas — safe to rewrite the full width. */
-    /* 14 = Phone, 20 = Month ('May 2026' is read back as a date otherwise). */
-    counts.bookings   = writeBlock_(pnl, 'Bookings',   s.Bookings,   1, 26, [14, 20]);
-    counts.expenses   = writeBlock_(pnl, 'Expenses',   s.Expenses,   1, 13);
-    counts.savings    = writeBlock_(pnl, 'Savings',    s.Savings,    1, 8);
-    counts.properties = writeBlock_(pnl, 'Properties', s.Properties, 1, 8);
-
-    /* IMS: write ONLY the editable columns. Item Master F/H/I/K and Stock Log
-       F/J are ARRAYFORMULAs living in row 2 — touching them destroys the
-       computed columns for every row. */
-    clearCols_(ims, 'Item Master', [[1, 5], [7, 1], [10, 1], [12, 3]]);
-    /* Item ids like 'DEC-04' are read by Sheets as 4-Dec dates unless the column
-       is pinned to plain text first. */
-    forceText_(ims, 'Item Master', [1], (s.ItemMasterA_E || []).length);
-    writeAt_(ims, 'Item Master', quoteCols_(s.ItemMasterA_E, [0]), 2, 1, 5);
-    writeAt_(ims, 'Item Master', s.ItemMasterG,   2, 7, 1);
-    writeAt_(ims, 'Item Master', s.ItemMasterJ,   2, 10, 1);
-    writeAt_(ims, 'Item Master', s.ItemMasterL_N, 2, 12, 3);
-    counts.invItems = (s.ItemMasterA_E || []).length;
-
-    clearCols_(ims, 'Stock Log', [[1, 5], [7, 3]]);
-    writeAt_(ims, 'Stock Log', s.StockLogA_E, 2, 1, 5);
-    writeAt_(ims, 'Stock Log', s.StockLogG_I, 2, 7, 3);
-    counts.invMovements = (s.StockLogA_E || []).length;
-
-    stampMirroredAt_(pnl);
+    counts.bookings   = writeTab_(ss, 'Bookings',   s.Bookings);
+    counts.expenses   = writeTab_(ss, 'Expenses',   s.Expenses);
+    counts.savings    = writeTab_(ss, 'Savings',    s.Savings);
+    counts.properties = writeTab_(ss, 'Properties', s.Properties);
+    /* Inventory arrives as column slices shaped for the old workbook, whose
+       formula columns had to be skipped. This sheet has no formulas, so the
+       slices are joined back into whole rows. */
+    counts.invItems     = writeTab_(ss, 'Inventory Items',
+      zip_(s.ItemMasterA_E, s.ItemMasterG, s.ItemMasterJ, s.ItemMasterL_N));
+    counts.invMovements = writeTab_(ss, 'Stock Log', zip_(s.StockLogA_E, s.StockLogG_I));
+    stampReadme_(ss, counts);
     return json_({ ok: true, counts: counts });
   } catch (err) {
     return json_({ ok: false, error: String((err && err.message) || err) });
   }
+}
+
+/* Row-wise concatenation of equally long column slices. */
+function zip_() {
+  const parts = Array.prototype.slice.call(arguments).map(function (p) { return p || []; });
+  const n = parts.reduce(function (m, p) { return Math.max(m, p.length); }, 0);
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    let row = [];
+    parts.forEach(function (p) { row = row.concat(p[i] || []); });
+    out.push(row);
+  }
+  return out;
+}
+
+/* Rewrites a whole tab: header row, then the data, with any surplus rows or
+   columns from a previous, larger snapshot cleared. */
+function writeTab_(ss, name, rows) {
+  rows = rows || [];
+  let sh = ss.getSheetByName(name);
+  if (!sh) sh = ss.insertSheet(name);
+  const base = HEADERS[name] || [];
+  const width = Math.max(base.length, rows.reduce(function (m, r) { return Math.max(m, r.length); }, 0), 1);
+  const header = [];
+  for (let c = 0; c < width; c++) header.push(base[c] || 'Col ' + (c + 1));
+  const data = rows.map(function (r) {
+    const row = r.slice();
+    while (row.length < width) row.push('');
+    header.forEach(function (h, c) {
+      if (TEXT_COLS.indexOf(h) >= 0 && typeof row[c] === 'string' && row[c] !== '') row[c] = "'" + row[c];
+    });
+    return row;
+  });
+
+  sh.clearContents();
+  if (sh.getMaxColumns() < width) sh.insertColumnsAfter(sh.getMaxColumns(), width - sh.getMaxColumns());
+  if (sh.getMaxRows() < data.length + 1) sh.insertRowsAfter(sh.getMaxRows(), data.length + 1 - sh.getMaxRows());
+  sh.getRange(1, 1, 1, width).setValues([header]).setFontWeight('bold');
+  sh.setFrozenRows(1);
+  if (data.length) sh.getRange(2, 1, data.length, width).setValues(data);
+  return data.length;
 }
 
 function json_(obj) {
@@ -78,104 +131,34 @@ function json_(obj) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-/* Rewrites rows 2..n of a tab, clearing any surplus rows left over from a
-   previous, longer snapshot. */
-function writeBlock_(ss, tabName, rows, startCol, width, textCols) {
-  const sh = ss.getSheetByName(tabName);
-  if (!sh) throw new Error('Missing tab: ' + tabName);
-  rows = rows || [];
-  const last = sh.getLastRow();
-  if (last >= 2) sh.getRange(2, startCol, last - 1, width).clearContent();
-  if (rows.length) {
-    ensureRows_(sh, rows.length + 1);
-    if (textCols && textCols.length) {
-      forceText_(ss, tabName, textCols, rows.length);
-      rows = quoteCols_(rows, textCols.map(function (c) { return c - startCol; }));
-    }
-    sh.getRange(2, startCol, rows.length, width).setValues(rows);
-  }
-  return rows.length;
-}
-
-/* Pins columns to plain text BEFORE the write. Cosmetic on its own — see
-   quoteCols_ for the part that actually stops the coercion. */
-function forceText_(ss, tabName, cols, nRows) {
-  if (!nRows) return;
-  const sh = ss.getSheetByName(tabName);
-  if (!sh) return;
-  ensureRows_(sh, nRows + 1);
-  cols.forEach(function (c) { sh.getRange(2, c, nRows, 1).setNumberFormat('@'); });
-}
-
-/**
- * Forces the named columns to land as literal text.
- *
- * setValues() parses like a human typing into the cell, and a plain-text number
- * format does NOT switch that off — 'DEC-04' still becomes 4-Dec (serial 46360)
- * and 'May 2026' still becomes 1-May. The leading apostrophe is the only thing
- * Sheets honours unconditionally; it is stripped on read, so getValues() and
- * the old API see the original string back.
- *
- * Columns that need it: item ids ('DEC-04'), booking Month ('May 2026'), and
- * phone (a bare '+91…' would be read as a formula). All three are TEXT in D1.
- *
- * `idxs` are 0-based offsets into each row, not sheet columns.
- */
-function quoteCols_(rows, idxs) {
-  return (rows || []).map(function (row) {
-    const copy = row.slice();
-    idxs.forEach(function (i) {
-      if (typeof copy[i] === 'string' && copy[i] !== '') copy[i] = "'" + copy[i];
-    });
-    return copy;
-  });
-}
-
-function clearCols_(ss, tabName, blocks) {
-  const sh = ss.getSheetByName(tabName);
-  if (!sh) throw new Error('Missing tab: ' + tabName);
-  const last = sh.getLastRow();
-  if (last < 2) return;
-  blocks.forEach(function (b) { sh.getRange(2, b[0], last - 1, b[1]).clearContent(); });
-}
-
-function writeAt_(ss, tabName, rows, startRow, startCol, width) {
-  if (!rows || !rows.length) return;
-  const sh = ss.getSheetByName(tabName);
-  ensureRows_(sh, startRow + rows.length - 1);
-  sh.getRange(startRow, startCol, rows.length, width).setValues(rows);
-}
-
-function ensureRows_(sh, needed) {
-  if (sh.getMaxRows() < needed) sh.insertRowsAfter(sh.getMaxRows(), needed - sh.getMaxRows());
-}
-
-/* Leaves a visible marker so nobody mistakes the sheet for a live input surface. */
-function stampMirroredAt_(ss) {
-  const sh = ss.getSheetByName('README');
-  if (!sh) return;
-  sh.getRange('A1').setValue(
-    'READ-ONLY MIRROR — source of truth is the Cloudflare D1 database. ' +
-    'Edits here are overwritten. Last mirrored: ' +
+/* A visible marker so nobody mistakes the sheet for an input surface. */
+function stampReadme_(ss, counts) {
+  let sh = ss.getSheetByName('README');
+  if (!sh) { sh = ss.insertSheet('README', 0); }
+  sh.getRange('A1').setValue('READ-ONLY MIRROR of the Roam in Heels database. Edits here are overwritten on the next run.');
+  sh.getRange('A2').setValue('Last mirrored: ' +
     Utilities.formatDate(new Date(), 'Asia/Kolkata', 'dd MMM yyyy, HH:mm') + ' IST');
+  sh.getRange('A3').setValue('Rows: ' + JSON.stringify(counts));
 }
 
 /**
  * One-time bootstrap + health check.
  *
- * Script Properties cannot be set from clasp, so the shared secret is planted
- * once over HTTPS: GET ?init=<secret> writes MIRROR_SECRET **only while it is
- * unset**. Once set, this route refuses forever — it can never overwrite or
- * reveal the live secret, so leaving it deployed is inert. To rotate, clear the
- * property in Project Settings first.
+ * GET ?init=<secret> stores MIRROR_SECRET **only while it is unset**. Once set
+ * this route refuses forever — it can never overwrite or reveal the live
+ * secret. To rotate, clear the property in Project Settings first.
  *
- * A bare GET is a health check: says whether the mirror is configured, nothing
- * more. The sheets are never readable through this route.
+ * A bare GET is a health check: whether the mirror is configured and which
+ * sheet it writes to (by name). The sheet's data is never readable here.
  */
 function doGet(e) {
   const props = PropertiesService.getScriptProperties();
   const init = (e && e.parameter && e.parameter.init) || '';
-  if (!init) return json_({ ok: true, configured: !!props.getProperty('MIRROR_SECRET') });
+  if (!init) {
+    const ss = sheet_();
+    return json_({ ok: true, mirror: true, configured: !!props.getProperty('MIRROR_SECRET'),
+                   sheet: ss ? ss.getName() : null });
+  }
   if (props.getProperty('MIRROR_SECRET')) {
     return json_({ ok: false, error: 'Already initialised — clear MIRROR_SECRET to rotate' });
   }
