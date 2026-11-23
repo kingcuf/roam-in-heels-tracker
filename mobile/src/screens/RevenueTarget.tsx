@@ -1,14 +1,15 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { C, F, inr } from '../theme';
 import { useStore, authStore } from '../store';
 import { api } from '../api';
 import {
-  shiftDay, dayKeyOf, dayWindow, revenueByDay, targetSummary, CI_MON, RevBasis, DayRev,
+  shiftDay, dayKeyOf, dayWindow, revenueByDay, targetSummary, cardOf, CI_MON, RevBasis, DayRev,
 } from '../logic';
 import { Btn, Hint, Panel, PanelTitle, Segmented, Sheet, useToast } from '../ui';
 import { Field, TxtInput } from '../fields';
 import { TargetChart, kShort } from '../charts';
+import { BookingDetail } from '../bookingDetail';
 
 /* ── Daily revenue vs target ──
    "Are we making our number?" — one panel on the Report, answering it two ways
@@ -27,6 +28,9 @@ import { TargetChart, kShort } from '../charts';
 type Win = '7' | '30' | 'mtd';
 type Targets = Record<string, { daily: number; updatedAt?: string; updatedBy?: string }>;
 const LOCAL_KEY = 'rih_revenue_targets';
+/* Matches CalendarScreen: wait for a sheet's dismissal to finish before a tab
+   switch, or the Modal is left as a dead window over the app. */
+const SHEET_DISMISS_MS = 320;
 const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const dayLabel = (k: string) => {
   const p = k.split('-'); const d = new Date(+p[0], +p[1] - 1, +p[2]);
@@ -48,6 +52,13 @@ export default function RevenueTarget() {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [saving, setSaving] = useState(false);
+  /* The day sheet: which day is open, and which booking in it (row id) is
+     showing its detail. One sheet whose content swaps, not two stacked
+     Modals — stacking them is what leaves dead windows behind. */
+  const [dayOpen, setDayOpen] = useState<string | null>(null);
+  const [detailRow, setDetailRow] = useState<number | null>(null);
+  const navTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (navTimer.current) clearTimeout(navTimer.current); }, []);
   const isAdmin = s.me?.role === 'Admin';
   const scope = s.filter || 'All';
   const scopeName = scope === 'All' ? 'All properties' : scope;
@@ -79,7 +90,7 @@ export default function RevenueTarget() {
   const by = useMemo(() => revenueByDay(s.logs?.bookings || null, scope, basis), [s.logs, scope, basis]);
   const days = useMemo(() => dayWindow(by, end, count), [by, count, dayKeyOf(end)]);
   const todayKey = dayKeyOf(todayD);
-  const today: DayRev = by.days[todayKey] ? { ...by.days[todayKey] } : { key: todayKey, rev: 0, n: 0 };
+  const today: DayRev = by.days[todayKey] ? { ...by.days[todayKey] } : { key: todayKey, rev: 0, n: 0, items: [] };
   const sum = targetSummary(days, target);
   const prev = win === 'mtd' ? null : targetSummary(dayWindow(by, shiftDay(end, -count), count), target);
 
@@ -116,6 +127,47 @@ export default function RevenueTarget() {
   const winLbl = win === '7' ? 'last 7 days' : win === '30' ? 'last 30 days' : 'this month';
   const avgLbl = win === 'mtd' ? 'the month’s average' : 'the ' + count + '-day average';
   const pctTxt = (p: number) => (p >= 100 ? '▲ ' + Math.round(p - 100) + '% above' : '▼ ' + Math.round(100 - p) + '% below');
+
+  /* ── day sheet ── */
+  const openDay = (k: string) => { setSel(k); setDetailRow(null); setDayOpen(k); };
+  const closeDay = () => { setDayOpen(null); setDetailRow(null); };
+  const rowsById = useMemo(() => {
+    const m = new Map<number, { r: number; cells: any[] }>();
+    for (const o of s.logs?.bookings?.rows || []) m.set(o.r, o);
+    return m;
+  }, [s.logs]);
+  const openDayRev: DayRev | null = dayOpen
+    ? (by.days[dayOpen] || { key: dayOpen, rev: 0, n: 0, items: [] })
+    : null;
+  const dayItems = (openDayRev?.items || [])
+    .map((it) => { const o = rowsById.get(it.r); return o ? { it, c: cardOf(o) } : null; })
+    .filter((x): x is { it: DayRev['items'][number]; c: ReturnType<typeof cardOf> } => !!x)
+    .sort((a, b) => b.it.amt - a.it.amt);
+  const detailItem = detailRow === null ? null : (openDayRev?.items || []).find((it) => it.r === detailRow) || null;
+  const detailRowObj = detailRow === null ? null : rowsById.get(detailRow) || null;
+  const detail = detailRowObj ? cardOf(detailRowObj) : null;
+  const sheetTitle = detail
+    ? (detail.guest || detail.id || 'Booking')
+    : dayOpen ? (dayOpen === todayKey ? 'Today, so far' : dayLabel(dayOpen)) : '';
+  const sheetValue = detail
+    ? inr(detail.net) + (detail.id ? ' · ' + detail.id : '')
+    : openDayRev ? inr(openDayRev.rev) + ' · ' + openDayRev.n + ' ' + (openDayRev.n === 1 ? unit[0] : unit[1]) : '';
+  /* Same hand-off as the Calendar: close, let the dismissal finish, then open
+     the booking in the Add tab's form. */
+  const editBooking = (row: number) => {
+    const o = rowsById.get(row);
+    if (!o || !s.addSegs.includes('book')) return;
+    closeDay();
+    if (navTimer.current) clearTimeout(navTimer.current);
+    navTimer.current = setTimeout(() => {
+      navTimer.current = null;
+      s.setEditB({ row, bookingId: String(o.cells[18] || ''), from: 'blog', cells: o.cells });
+      s.setAddSeg('book');
+      s.setTab('add');
+    }, SHEET_DISMISS_MS);
+  };
+  /* Leaving the Report with the sheet open closes it, as on the Calendar. */
+  useEffect(() => { if (s.tab !== 'dash') closeDay(); }, [s.tab]);
 
   if (!s.logs) {
     return (
@@ -192,11 +244,12 @@ export default function RevenueTarget() {
         <Text style={st.muted}>The month started today — no complete day yet. Today so far is on the chart.</Text>
       )}
 
-      <TargetChart days={days} today={today} target={target} avg={sum.avg} selected={sel} onSelect={setSel} />
+      <TargetChart days={days} today={today} target={target} avg={sum.avg} selected={sel} onSelect={openDay} />
 
       {/* the tapped day, in words */}
       {selDay && (
-        <View style={st.dayCard}>
+        <TouchableOpacity style={st.dayCard} activeOpacity={0.7} onPress={() => openDay(selDay.key)}
+          accessibilityRole="button" accessibilityLabel="Show this day's bookings">
           <View style={{ flex: 1 }}>
             <Text style={st.dayLbl}>{cardKey === todayKey ? 'Today, so far' : dayLabel(selDay.key)}</Text>
             <Text style={st.daySub}>
@@ -208,18 +261,20 @@ export default function RevenueTarget() {
             <Text style={st.dayVal}>{inr(selDay.rev)}</Text>
             {target ? (
               <Text style={[st.dayDiff, { color: selDay.rev >= target ? C.green : C.red }]}>
-                {selDay.rev >= target ? '✓ ' + inr(selDay.rev - target) + ' over' : inr(target - selDay.rev) + ' short'}
+                {Math.round(selDay.rev) === Math.round(target) ? '✓ on target'
+                  : selDay.rev >= target ? '✓ ' + inr(selDay.rev - target) + ' over' : inr(target - selDay.rev) + ' short'}
               </Text>
             ) : null}
           </View>
-        </View>
+          <Text style={st.chev}>›</Text>
+        </TouchableOpacity>
       )}
 
       <Hint>
         {basis === 'booked'
           ? 'Booking date: each booking’s full net counts on the day it was booked.'
           : 'Stay date: each booking’s net is spread evenly over its nights (check-in to the night before check-out).'}
-        {' '}Average and days on target use complete days only; today is shown faded and is not counted. Tap a bar for that day.
+        {' '}Average and days on target use complete days only; today is shown faded and is not counted. Tap a bar to see that day’s bookings.
       </Hint>
       {basis === 'stay' && by.unplaced > 0 && (
         <Hint>
@@ -230,6 +285,57 @@ export default function RevenueTarget() {
       {localOnly && (
         <Hint>The server doesn’t store targets yet, so this target is saved on this device only.</Hint>
       )}
+
+      <Sheet visible={!!dayOpen} title={sheetTitle} value={sheetValue} onClose={closeDay}>
+        {detail ? (
+          <View>
+            <TouchableOpacity onPress={() => setDetailRow(null)} style={st.back} hitSlop={8}>
+              <Text style={st.backTxt}>‹  {dayOpen === todayKey ? 'Today' : dayOpen ? dayLabel(dayOpen) : ''}</Text>
+            </TouchableOpacity>
+            {detailItem && basis === 'stay' && detailItem.nights ? (
+              <Text style={st.share}>
+                {'Counts ' + inr(detailItem.amt) + ' on this day — night ' + detailItem.night + ' of ' + detailItem.nights + '.'}
+              </Text>
+            ) : null}
+            <BookingDetail b={detail} onEdit={s.addSegs.includes('book') ? () => editBooking(detail.row) : undefined} />
+          </View>
+        ) : openDayRev ? (
+          <View>
+            {target ? (
+              <Text style={[st.share, { color: openDayRev.rev >= target ? C.green : C.red }]}>
+                {Math.round(openDayRev.rev) === Math.round(target)
+                  ? '✓ Exactly on the ' + kShort(target) + ' target'
+                  : openDayRev.rev >= target
+                  ? '✓ ' + inr(openDayRev.rev - target) + ' over the ' + kShort(target) + ' target'
+                  : inr(target - openDayRev.rev) + ' short of the ' + kShort(target) + ' target'}
+              </Text>
+            ) : null}
+            {dayItems.length === 0 ? (
+              <Text style={[st.muted, { paddingVertical: 14 }]}>
+                {basis === 'booked' ? 'No bookings were made on this day.' : 'Nobody stayed on this night.'}
+              </Text>
+            ) : dayItems.map(({ it, c }) => (
+              <TouchableOpacity key={it.r + ':' + (it.night || 0)} style={st.bRow} activeOpacity={0.6}
+                onPress={() => setDetailRow(it.r)} accessibilityRole="button">
+                <View style={{ flex: 1 }}>
+                  <Text style={st.bGuest} numberOfLines={1}>{c.guest || c.id || 'Booking'}</Text>
+                  <Text style={st.bSub} numberOfLines={1}>
+                    {[c.prop, c.type, c.channel].filter(Boolean).join(' · ')}
+                    {it.nights ? ' · night ' + it.night + ' of ' + it.nights : ''}
+                  </Text>
+                </View>
+                <View style={{ alignItems: 'flex-end' }}>
+                  <Text style={st.bAmt}>{inr(it.amt)}</Text>
+                  {it.nights && Math.round(it.amt) !== Math.round(c.net) ? (
+                    <Text style={st.bOf}>{'of ' + inr(c.net)}</Text>
+                  ) : null}
+                </View>
+                <Text style={st.chev}>›</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        ) : null}
+      </Sheet>
 
       <Sheet visible={editing} title="Daily revenue target" value={scopeName} onClose={() => setEditing(false)}>
         <View style={{ paddingTop: 8 }}>
@@ -282,4 +388,16 @@ const st = StyleSheet.create({
   daySub: { fontFamily: F.med, fontSize: 12, color: C.muted, marginTop: 2 },
   dayVal: { fontFamily: F.xbold, fontSize: 18, color: C.ink },
   dayDiff: { fontFamily: F.bold, fontSize: 12, marginTop: 2 },
+  chev: { fontFamily: F.bold, fontSize: 20, color: C.muted, marginLeft: 6 },
+  back: { paddingVertical: 8, alignSelf: 'flex-start' },
+  backTxt: { fontFamily: F.bold, fontSize: 13.5, color: C.blue2 },
+  share: { fontFamily: F.semi, fontSize: 12.5, color: C.bark, marginTop: 4, marginBottom: 6 },
+  bRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12,
+    borderBottomWidth: 1, borderBottomColor: C.hair, minHeight: 56,
+  },
+  bGuest: { fontFamily: F.bold, fontSize: 14.5, color: C.ink },
+  bSub: { fontFamily: F.med, fontSize: 12, color: C.muted, marginTop: 2 },
+  bAmt: { fontFamily: F.xbold, fontSize: 15, color: C.ink },
+  bOf: { fontFamily: F.med, fontSize: 11, color: C.muted, marginTop: 1 },
 });

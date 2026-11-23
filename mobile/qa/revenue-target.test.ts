@@ -117,8 +117,8 @@ const block = (rows: any[][]): LogBlock => ({ headers: [], rows: rows.map((cells
 /* ══ targetSummary ══ */
 {
   const days = [
-    { key: 'a', rev: 12000, n: 2 }, { key: 'b', rev: 8000, n: 1 }, { key: 'c', rev: 10000, n: 1 },
-    { key: 'd', rev: 0, n: 0 },
+    { key: 'a', rev: 12000, n: 2, items: [] }, { key: 'b', rev: 8000, n: 1, items: [] }, { key: 'c', rev: 10000, n: 1, items: [] },
+    { key: 'd', rev: 0, n: 0, items: [] },
   ];
   // total 30000 over 4 days → avg 7500; target 10000 → hit a and c (≥) = 2;
   // gap 30000 − 40000 = −10000; pct 75
@@ -134,6 +134,22 @@ const block = (rows: any[][]): LogBlock => ({ headers: [], rows: rows.map((cells
   eq('summary: zero target treated as none', targetSummary(days, 0).hit, null);
   const empty = targetSummary([], 5000);
   eq('summary: empty window', [empty.n, empty.avg, empty.pct, empty.best], [0, null, null, null]);
+}
+
+/* ══ per-day booking lists (what a tapped bar shows) ══ */
+{
+  const b = block([
+    bk({ booked: '2026-11-10', net: 6000, inD: '2026-11-20', outD: '2026-11-23' }),  // row 2
+    bk({ booked: '2026-11-10', net: 2000 }),                                       // row 3
+  ]);
+  const booked = revenueByDay(b, 'All', 'booked');
+  eq('items (booked): both rows on the 10th, whole net', booked.days['2026-11-10'].items, [{ r: 2, amt: 6000 }, { r: 3, amt: 2000 }]);
+  const stay = revenueByDay(b, 'All', 'stay');
+  eq('items (stay): night 2 of 3 on the 21st', stay.days['2026-11-21'].items, [{ r: 2, amt: 2000, night: 2, nights: 3 }]);
+  // items always sum to the day's figure
+  const d = stay.days['2026-11-22'];
+  eq('items sum to rev', near(d.items.reduce((a, x) => a + x.amt, 0), d.rev), true);
+  eq('window: empty day has an empty list', dayWindow(booked, new Date(2026, 10, 11), 1)[0].items, []);
 }
 
 console.log(failures.join('\n'));

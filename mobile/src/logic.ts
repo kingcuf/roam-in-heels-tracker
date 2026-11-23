@@ -1298,7 +1298,12 @@ export function fmtEnquiryWhen(s: string): string {
    (scopeBooking), and only rows with a Booking ID count — the same rule as the
    server's revenue KPI and the Calendar, so the figures agree with both. */
 export type RevBasis = 'booked' | 'stay';
-export type DayRev = { key: string; rev: number; n: number };
+/* `items` = the bookings behind a day's figure, so a tapped bar can list them:
+   `amt` is what this booking contributed to THIS day (its whole net on the
+   booking-date basis, one night's share on the stay basis), `night` is which
+   night of `nights` that was (stay basis only). */
+export type DayItem = { r: number; amt: number; night?: number; nights?: number };
+export type DayRev = { key: string; rev: number; n: number; items: DayItem[] };
 export type RevByDay = { days: Record<string, DayRev>; unplaced: number; unplacedAmt: number };
 
 /* Local-calendar day arithmetic on a Date (addDays above works on day keys).
@@ -1309,9 +1314,9 @@ export const shiftDay = (dt: Date, i: number) => new Date(dt.getFullYear(), dt.g
 export function revenueByDay(block: LogBlock | null, filter: string, basis: RevBasis): RevByDay {
   const days: Record<string, DayRev> = {};
   let unplaced = 0, unplacedAmt = 0;
-  const add = (k: string, v: number) => {
-    const d = (days[k] = days[k] || { key: k, rev: 0, n: 0 });
-    d.rev += v; d.n++;
+  const add = (k: string, it: DayItem) => {
+    const d = (days[k] = days[k] || { key: k, rev: 0, n: 0, items: [] });
+    d.rev += it.amt; d.n++; d.items.push(it);
   };
   for (const o of (block && block.rows) || []) {
     const c = o.cells;
@@ -1321,16 +1326,16 @@ export function revenueByDay(block: LogBlock | null, filter: string, basis: RevB
     const net = sc.share(ciNum(c[9]));
     if (basis === 'booked') {
       const k = ciDayKey(c[0]);
-      if (k) add(k, net); else { unplaced++; unplacedAmt += net; }
+      if (k) add(k, { r: o.r, amt: net }); else { unplaced++; unplacedAmt += net; }
       continue;
     }
     const inD = ciParse(c[20]);
     if (!inD) { unplaced++; unplacedAmt += net; continue; }
     const outD = ciParse(c[21]);
     const nights = outD ? Math.round((outD.getTime() - inD.getTime()) / 86400000) : 0;
-    if (nights <= 0) { add(dayKeyOf(inD), net); continue; }
+    if (nights <= 0) { add(dayKeyOf(inD), { r: o.r, amt: net }); continue; }
     const per = net / nights;
-    for (let i = 0; i < nights; i++) add(dayKeyOf(shiftDay(inD, i)), per);
+    for (let i = 0; i < nights; i++) add(dayKeyOf(shiftDay(inD, i)), { r: o.r, amt: per, night: i + 1, nights });
   }
   return { days, unplaced, unplacedAmt };
 }
@@ -1341,7 +1346,7 @@ export function dayWindow(by: RevByDay, end: Date, count: number): DayRev[] {
   const out: DayRev[] = [];
   for (let i = count - 1; i >= 0; i--) {
     const k = dayKeyOf(shiftDay(end, -i));
-    out.push(by.days[k] ? { ...by.days[k] } : { key: k, rev: 0, n: 0 });
+    out.push(by.days[k] ? { ...by.days[k] } : { key: k, rev: 0, n: 0, items: [] });
   }
   return out;
 }
