@@ -7,7 +7,7 @@
    LogCtx     — lets a form open its record log, which now lives behind a
    button rather than under the form. */
 import React, { createContext, useContext } from 'react';
-import { Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { C, F, G } from './theme';
 import { Btn, Panel } from './ui';
 import { Rise } from './motion';
@@ -41,13 +41,14 @@ export { SubmitCtx } from './formctx';
    consume the IME insets itself and this prop alone will not fix it. That work
    is NOT done, and it also has to cover the sign-in screen, where the PIN box
    and Unlock both sit under the keypad. Recorded as open, not fixed. */
-export const FormScroll = React.forwardRef<React.ComponentRef<typeof ScrollView>, React.ComponentProps<typeof ScrollView> & { onSubmit?: () => void }>(
-  function FormScroll({ onSubmit, children, contentContainerStyle, ...rest }, ref) {
+export const FormScroll = React.forwardRef<React.ComponentRef<typeof ScrollView>, React.ComponentProps<typeof ScrollView> & { onSubmit?: () => void; sticky?: boolean }>(
+  function FormScroll({ onSubmit, sticky, children, contentContainerStyle, ...rest }, ref) {
   return (
     <SubmitCtx.Provider value={onSubmit || null}>
       <ScrollView
         ref={ref}
         keyboardShouldPersistTaps="handled"
+        stickyHeaderIndices={sticky ? [0] : undefined}
         automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
         contentContainerStyle={[{ padding: 14, paddingBottom: 60 }, contentContainerStyle]}
         {...rest}
@@ -73,15 +74,26 @@ export function FormHeader({ title, sub, onSave, saveTitle, saveDisabled, saveKi
   onClear: () => void; clearTitle?: string;
 }) {
   const log = useContext(LogCtx);
+  /* Compact and pinned (FormScroll makes it sticky): the title and Save stay
+     in reach however far down the form you are; History and Clear are quiet
+     text links, so the one gold button is the only thing competing for a tap. */
   return (
-    <View style={st.head}>
-      <View style={{ flexShrink: 1, minWidth: 160 }}>
-        <Text style={st.h2}>{title}</Text>
-        {sub ? <Text style={st.sub}>{sub}</Text> : null}
-      </View>
-      <View style={st.actions}>
-        {log ? <Btn title={'☰ ' + log.label} kind="ghost" onPress={log.open} style={st.btn} /> : null}
-        <Btn title={clearTitle} kind="ghost" onPress={onClear} style={st.btn} />
+    <View style={st.headWrap}>
+      <View style={st.head}>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={st.h2} numberOfLines={1}>{title}</Text>
+          <View style={st.links}>
+            {sub ? <Text style={st.sub} numberOfLines={1}>{sub}</Text> : null}
+            {log ? (
+              <TouchableOpacity onPress={log.open} hitSlop={8} accessibilityRole="button">
+                <Text style={st.link}>☰ History</Text>
+              </TouchableOpacity>
+            ) : null}
+            <TouchableOpacity onPress={onClear} hitSlop={8} accessibilityRole="button">
+              <Text style={[st.link, { color: C.bark }]}>{clearTitle}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
         {showSave ? <Btn title={saveTitle} kind={saveKind || 'primary'} onPress={onSave} disabled={saveDisabled} style={[st.btn, st.save]} /> : null}
       </View>
     </View>
@@ -141,9 +153,15 @@ export function Col({ children }: { children: React.ReactNode }) {
 }
 
 const st = StyleSheet.create({
-  head: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, flexWrap: 'wrap', gap: 10 },
-  h2: { fontSize: 25, color: C.ink, fontFamily: F.xbold, letterSpacing: -0.6 },
-  sub: { fontFamily: F.med, fontSize: 12, color: C.bark, marginTop: 2 },
+  headWrap: {
+    marginHorizontal: -14, marginTop: -14, marginBottom: 10, paddingHorizontal: 14, paddingTop: 12, paddingBottom: 10,
+    backgroundColor: '#F8F0E6', zIndex: 10, borderBottomWidth: 1, borderBottomColor: 'rgba(185,128,54,0.10)',
+  },
+  head: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  h2: { fontSize: 22, color: C.ink, fontFamily: F.xbold, letterSpacing: -0.5 },
+  links: { flexDirection: 'row', alignItems: 'center', gap: 14, marginTop: 3, flexWrap: 'wrap' },
+  link: { fontFamily: F.bold, fontSize: 12.5, color: C.blue2 },
+  sub: { fontFamily: F.med, fontSize: 12, color: C.bark, flexShrink: 1 },
   /* maxWidth clamps this to the line. In the footer `actions` IS the outer
      container, so it inherits the page width and its flexWrap works — the four
      buttons wrap and Submit stays on screen. In the header it is a flex ITEM

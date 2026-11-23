@@ -84,49 +84,98 @@ function FormPane({ form, log, label, editing }: {
   );
 }
 
+/* Setup = the catalog behind the daily forms: units, stock, message library.
+   Each opens from a hub card and returns to it, so the top bar carries only
+   the three things recorded every day. */
+const SETUP: { key: AddSeg; label: string; icon: string; desc: string }[] = [
+  { key: 'prop', label: 'Properties', icon: '⌂', desc: 'Units, rent, guest info for messages' },
+  { key: 'inv', label: 'Inventory', icon: '▤', desc: 'Linen, toiletries and stock per unit' },
+  { key: 'msg', label: 'Messages', icon: '✉', desc: 'WhatsApp templates for guests and hosts' },
+];
+const SETUP_KEYS: AddSeg[] = ['prop', 'inv', 'msg'];
+
 function AddContainer() {
   const s = useStore();
+  const [hub, setHub] = React.useState(false);
+  const setup = SETUP.filter((x) => s.addSegs.includes(x.key));
+  const inSetup = SETUP_KEYS.includes(s.addSeg);
+  /* Something outside opened a Setup pane (e.g. "Edit property"): show it. */
+  React.useEffect(() => { if (!inSetup) setHub(false); }, [inSetup]);
+  React.useEffect(() => { if (s.editP && s.addSeg === 'prop') setHub(false); }, [s.editP]);
+  const segs = [
+    ...ADD_SEGMENTS.filter((g) => !SETUP_KEYS.includes(g.key) && s.addSegs.includes(g.key)).map((g) => ({
+      key: g.key as string, label: g.label,
+      dot: (g.key === 'book' && !!s.editB) || (g.key === 'exp' && !!s.editE) || (g.key === 'sav' && !!s.editS),
+    })),
+    ...(setup.length ? [{ key: 'setup', label: 'Setup', dot: !!s.editP || !!s.invEdit }] : []),
+  ];
+  const value = inSetup ? 'setup' : s.addSeg;
+  const showHub = inSetup ? hub : false;
+  const pane = (k: AddSeg) => s.addSeg !== k || (SETUP_KEYS.includes(k) && showHub);
+  const back = setup.length > 1 ? (
+    <TouchableOpacity onPress={() => setHub(true)} style={st.setupBack} activeOpacity={0.7} hitSlop={6}>
+      <Text style={st.logBackTxt}>‹  Setup</Text>
+    </TouchableOpacity>
+  ) : null;
   return (
     <View style={{ flex: 1 }}>
       <Segmented
-        segments={ADD_SEGMENTS.filter((g) => s.addSegs.includes(g.key)).map((g) => ({
-          key: g.key,
-          label: g.label,
-          dot: (g.key === 'book' && !!s.editB) || (g.key === 'exp' && !!s.editE) ||
-               (g.key === 'sav' && !!s.editS) || (g.key === 'prop' && !!s.editP) ||
-               (g.key === 'inv' && !!s.invEdit),
-        }))}
-        value={s.addSeg}
-        onChange={(k) => s.setAddSeg(k as AddSeg)}
+        segments={segs}
+        value={value}
+        onChange={(k) => {
+          if (k !== 'setup') { s.setAddSeg(k as AddSeg); return; }
+          if (setup.length === 1) { s.setAddSeg(setup[0].key); setHub(false); return; }
+          if (!inSetup) s.setAddSeg(setup[0].key);
+          setHub(true);
+        }}
       />
       {/* A segment the role has no rights on is not mounted at all. */}
       {s.addSegs.includes('book') && (
-        <View style={[{ flex: 1 }, s.addSeg !== 'book' && st.hidden]}>
+        <View style={[{ flex: 1 }, pane('book') && st.hidden]}>
           <FormPane form={<BookingForm />} log={<LogsScreen which="blog" />} label="Booking" editing={!!s.editB} />
         </View>
       )}
       {s.addSegs.includes('exp') && (
-        <View style={[{ flex: 1 }, s.addSeg !== 'exp' && st.hidden]}>
+        <View style={[{ flex: 1 }, pane('exp') && st.hidden]}>
           <FormPane form={<ExpenseForm />} log={<LogsScreen which="elog" />} label="Expense" editing={!!s.editE} />
         </View>
       )}
       {s.addSegs.includes('sav') && (
-        <View style={[{ flex: 1 }, s.addSeg !== 'sav' && st.hidden]}>
+        <View style={[{ flex: 1 }, pane('sav') && st.hidden]}>
           <FormPane form={<SavingForm />} log={<LogsScreen which="slog" />} label="Saving" editing={!!s.editS} />
         </View>
       )}
+      {showHub ? (
+        <ScrollView contentContainerStyle={{ padding: 14, gap: 10, paddingBottom: 120 }}>
+          <Text style={st.hubH}>Setup</Text>
+          <Text style={st.hubSub}>The details every booking draws on. Changed now and then, not every day.</Text>
+          {setup.map((x) => (
+            <TouchableOpacity key={x.key} style={st.hubCard} activeOpacity={0.8}
+              onPress={() => { s.setAddSeg(x.key); setHub(false); }}>
+              <View style={st.hubIcon}><Text style={st.hubIconT}>{x.icon}</Text></View>
+              <View style={{ flex: 1 }}>
+                <Text style={st.hubT}>{x.label}</Text>
+                <Text style={st.hubD}>{x.desc}</Text>
+              </View>
+              {(x.key === 'prop' && s.editP) || (x.key === 'inv' && s.invEdit) ? <View style={st.hubDot} /> : null}
+              <Text style={st.hubChev}>›</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      ) : null}
       {s.addSegs.includes('prop') && (
-        <View style={[{ flex: 1 }, s.addSeg !== 'prop' && st.hidden]}>
+        <View style={[{ flex: 1 }, pane('prop') && st.hidden]}>
+          {back}
           <FormPane form={<PropertyForm />} log={<Properties />} label="Property" editing={!!s.editP} />
         </View>
       )}
       {/* Inventory keeps its own items/movements handling internally. */}
       {s.addSegs.includes('inv') && (
-        <View style={[{ flex: 1 }, s.addSeg !== 'inv' && st.hidden]}><Inventory /></View>
+        <View style={[{ flex: 1 }, pane('inv') && st.hidden]}>{back}<Inventory /></View>
       )}
       {/* The message library (Admin only — see store.addSegs). */}
       {s.addSegs.includes('msg') && (
-        <View style={[{ flex: 1 }, s.addSeg !== 'msg' && st.hidden]}><MessageLibrary /></View>
+        <View style={[{ flex: 1 }, pane('msg') && st.hidden]}>{back}<MessageLibrary /></View>
       )}
     </View>
   );
@@ -299,6 +348,19 @@ export default function App() {
 }
 
 const st = StyleSheet.create({
+  setupBack: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 2 },
+  hubH: { fontFamily: F.xbold, fontSize: 22, color: C.ink, letterSpacing: -0.5, marginTop: 4 },
+  hubSub: { fontFamily: F.med, fontSize: 13, color: C.bark, lineHeight: 19, marginBottom: 4 },
+  hubCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 14, padding: 16, borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.82)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.9)',
+  },
+  hubIcon: { width: 44, height: 44, borderRadius: 14, backgroundColor: C.amberbg, alignItems: 'center', justifyContent: 'center' },
+  hubIconT: { fontSize: 20, color: C.blue2 },
+  hubT: { fontFamily: F.xbold, fontSize: 15.5, color: C.ink },
+  hubD: { fontFamily: F.med, fontSize: 12.5, color: C.muted, marginTop: 2 },
+  hubDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: C.blue },
+  hubChev: { fontFamily: F.bold, fontSize: 22, color: C.muted },
   boot: { flex: 1, backgroundColor: G.bgMid, alignItems: 'center', justifyContent: 'center' },
   safe: { flex: 1, backgroundColor: G.bgMid },
   hidden: { display: 'none' },

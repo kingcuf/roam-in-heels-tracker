@@ -152,7 +152,7 @@ export default function SavingForm() {
   if (!editing && !can.add) return <NoAdd what="savings" canChange={can.upd || can.del} />;
 
   return (
-    <FormScroll onSubmit={submit}>
+    <FormScroll sticky onSubmit={submit}>
       <FormHeader
         title={editing ? 'Edit Saving' : resub ? 'Edit Request' : 'Add Saving'}
         showSave={editing ? can.upd : can.add}

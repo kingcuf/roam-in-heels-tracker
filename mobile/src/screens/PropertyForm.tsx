@@ -128,7 +128,7 @@ export default function PropertyForm() {
   if (!editing && !can.add) return <NoAdd what="properties" canChange={can.upd || can.del} />;
 
   return (
-    <FormScroll onSubmit={submit}>
+    <FormScroll sticky onSubmit={submit}>
       <FormHeader
         title={editing ? 'Edit Property' : resub ? 'Edit Request' : 'Add Property'}
         showSave={editing ? can.upd : can.add}

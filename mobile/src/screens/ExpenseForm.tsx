@@ -4,6 +4,7 @@ import { C, F } from '../theme';
 import { useStore } from '../store';
 import { confirmDestructive, useToast } from '../ui';
 import { FormCard, FormFooter, FormHeader, FormScroll } from '../formkit';
+import { PropertyPicker } from '../propertyPicker';
 import { Field, TxtInput, SelectField, DateField, MonthField } from '../fields';
 import { api } from '../api';
 import { thisMonthIso, todayIso } from '../logic';
@@ -205,7 +206,7 @@ export default function ExpenseForm() {
   if (!editing && !can.add) return <NoAdd what="expenses" canChange={can.upd || can.del} />;
 
   return (
-    <FormScroll ref={scroller} onSubmit={submit}>
+    <FormScroll sticky ref={scroller} onSubmit={submit}>
       <FormHeader
         title={editing ? 'Edit Expense' : resub ? 'Edit Request' : 'Add Expense'}
         showSave={editing ? can.upd : can.add}
@@ -220,7 +221,7 @@ export default function ExpenseForm() {
       />
         <FormCard title="Expense" step={1} i={1}>
         <Field label="Property" req err={errs.property}>
-          <SelectField title="Property" value={f.property} options={s.props.map((p) => p.name)} onChange={set('property')} />
+          <PropertyPicker compact value={f.property} options={s.props} onChange={set('property')} />
         </Field>
         <Field label="Category" req err={errs.category}>
           <SelectField title="Category" value={f.category} options={CATEGORIES} onChange={set('category')} />

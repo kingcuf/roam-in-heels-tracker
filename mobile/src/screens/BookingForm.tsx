@@ -12,6 +12,7 @@ import { isMoneyText, moneyNum, moneyRule } from '../money';
 import { GuestNameInput, KnownGuest, useGuestDirectory } from '../guests';
 import { TouchableOpacity } from 'react-native';
 import { FormCard, FormFooter, FormHeader, FormScroll } from '../formkit';
+import { ChoiceChips, PropertyPicker } from '../propertyPicker';
 import TicketBanner, { NoAdd, writeLabels } from './TicketBanner';
 
 const CHANNELS = ['Airbnb', 'Booking.com', 'MMT', 'Agoda', 'Offline', 'Direct/Referral', 'Pass'];
@@ -78,6 +79,7 @@ export default function BookingForm() {
   /* Guests: 1 = lead (with phone), 2 = co-guest, 3+ = extras. The count is
      simply how many guests have been added. */
   const [nGuests, setNGuests] = useState(1);
+  const [partner, setPartner] = useState(false);   // "Partner flat…" chosen, number not typed yet
   const [extras, setExtras] = useState<ExtraGuest[]>([]);
   /* One-off checklist steps typed for a NEW booking; sent with it. */
   const [steps, setSteps] = useState<ExtraStep[]>([]);
@@ -185,6 +187,7 @@ export default function BookingForm() {
     setStaged({});
     setNGuests(1); setExtras([]); setSteps([]);
     setF({ ...EMPTY, date: todayIso(), property: s.props[0]?.name || '' });
+    setPartner(false);
   };
 
   const submit = async () => {
@@ -312,6 +315,8 @@ export default function BookingForm() {
   const otherUnits = s.props
     .filter((p) => p.name !== f.property)
     .map((p) => ({ name: p.name, no: unitNumberOf(p.name) || p.name }));
+  const stayMode: 'same' | 'owned' | 'partner' = partner ? 'partner'
+    : !f.stayUnit.trim() ? 'same' : otherUnits.some((u) => u.no === f.stayUnit.trim()) ? 'owned' : 'partner';
   /* Live, like the auto-commission line: what each unit ends up with, on the
      figures currently in the boxes. Preview only — the Worker resolves and
      freezes the real split at save time, using the same rule. */
@@ -364,7 +369,7 @@ export default function BookingForm() {
 
   return (
     <FormScroll
-      ref={scroller} onSubmit={submit}
+      sticky ref={scroller} onSubmit={submit}
       onLayout={(e) => { view.current.h = e.nativeEvent.layout.height; }}
       onScroll={(e) => { view.current.y = e.nativeEvent.contentOffset.y; }}
       scrollEventThrottle={16}
@@ -384,53 +389,53 @@ export default function BookingForm() {
       />
 
         <View onLayout={onCard('booking')}>
-        <FormCard title="Booking" step={1} i={1}>
-          <Two>
-            <View style={{ flex: 1 }}>
-              <Field label="Property" req err={errs.property}>
-                <SelectField title="Property" value={f.property} options={s.props.map((p) => p.name)} onChange={set('property')} />
-              </Field>
+        <FormCard title="Unit" step={1} i={1}>
+          <Field label="Booked on" req err={errs.property}>
+            <PropertyPicker value={f.property} options={s.props} onChange={set('property')} />
+          </Field>
+          {/* Where the guest actually sleeps. Most stays are "same unit"; the
+              other flats we own are a tap; a partner flat is typed. Same stored
+              value as before: '' = same, bare unit number or free text. */}
+          <Field label="Guest stays in" hint={stayMode === 'partner' ? 'A flat we don’t own — type its number.' : undefined}>
+            <View style={st.unitChips}>
+              <TouchableOpacity accessibilityRole="radio" accessibilityState={{ selected: stayMode === 'same' }}
+                style={[st.unitChip, stayMode === 'same' && st.unitChipOn]}
+                onPress={() => { setPartner(false); set('stayUnit')(''); }}>
+                <Text style={[st.unitChipTxt, stayMode === 'same' && st.unitChipTxtOn]}>Same unit</Text>
+              </TouchableOpacity>
+              {otherUnits.map((u) => {
+                const on = stayMode === 'owned' && f.stayUnit.trim() === u.no;
+                return (
+                  <TouchableOpacity key={u.no} accessibilityRole="radio" accessibilityState={{ selected: on }}
+                    style={[st.unitChip, on && st.unitChipOn]}
+                    onPress={() => { setPartner(false); set('stayUnit')(on ? '' : u.no); }}>
+                    <Text style={[st.unitChipTxt, on && st.unitChipTxtOn]}>{u.no === u.name ? u.name : 'Unit ' + u.no}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+              <TouchableOpacity accessibilityRole="radio" accessibilityState={{ selected: stayMode === 'partner' }}
+                style={[st.unitChip, stayMode === 'partner' && st.unitChipOn]}
+                onPress={() => { setPartner(true); if (stayMode !== 'partner') set('stayUnit')(''); }}>
+                <Text style={[st.unitChipTxt, stayMode === 'partner' && st.unitChipTxtOn]}>Partner flat…</Text>
+              </TouchableOpacity>
             </View>
-            <View style={{ flex: 1 }}>
-              <Field label="Stay unit" hint="The flat they actually get.">
-                <TxtInput value={f.stayUnit} onChange={set('stayUnit')} placeholder="e.g. 3028" />
-                {/* One tap for the OTHER flat we own — the only value a quick
-                    choice can save you typing, and the one the ₹500 split turns
-                    on. The box stays plain free text: a third-party flat (2121,
-                    3130, 4217) is typed exactly as before, and 2121 is a real
-                    flat, not a slip of 2212, so nothing here corrects it. */}
-                {otherUnits.length ? (
-                  <View style={st.unitChips}>
-                    {otherUnits.map((u) => {
-                      const on = f.stayUnit.trim() === u.no;
-                      return (
-                        <TouchableOpacity key={u.no} accessibilityRole="button"
-                          style={[st.unitChip, on && st.unitChipOn]}
-                          onPress={() => set('stayUnit')(on ? '' : u.no)}>
-                          <Text style={[st.unitChipTxt, on && st.unitChipTxtOn]}>{u.name}</Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                ) : null}
-              </Field>
-            </View>
-          </Two>
-          <Two>
-            <View style={{ flex: 1 }}>
-              <Field label="Booking date" req err={errs.date}>
-                <DateField value={f.date} onChange={set('date')} />
-              </Field>
-            </View>
-            <View style={{ flex: 1 }}>
-              <Field label="Booking type" req>
-                <SelectField title="Booking Type" value={f.type} options={['Stay', 'Resold', 'Pass']}
-                  onChange={(v) => setF((p) => ({ ...p, type: v, channel: v === 'Pass' ? 'Pass' : p.channel }))} />
-              </Field>
-            </View>
-          </Two>
+            {stayMode === 'partner' ? (
+              <View style={{ marginTop: 8 }}><TxtInput value={f.stayUnit} onChange={set('stayUnit')} placeholder="e.g. 2121" /></View>
+            ) : null}
+          </Field>
+        </FormCard>
+        </View>
+
+        <FormCard title="Booking" step={2} i={2}>
+          <Field label="Booking type" req>
+            <ChoiceChips value={f.type} options={['Stay', 'Resold', 'Pass']}
+              onChange={(v) => setF((p) => ({ ...p, type: v, channel: v === 'Pass' ? 'Pass' : p.channel }))} />
+          </Field>
           <Field label="Channel">
-            <SelectField title="Channel" value={f.channel} options={CHANNELS} onChange={set('channel')} />
+            <ChoiceChips value={f.channel} options={CHANNELS} onChange={set('channel')} />
+          </Field>
+          <Field label="Booking date" req err={errs.date}>
+            <DateField value={f.date} onChange={set('date')} />
           </Field>
           {/* The same column means different things by booking type, so the
               label follows the type instead of staying vague. */}
@@ -442,9 +447,8 @@ export default function BookingForm() {
               placeholder={f.type === 'Resold' ? 'e.g. Sudhir Badhana' : 'e.g. GVL Spira · Airbnb - Harsh'} />
           </Field>
         </FormCard>
-        </View>
 
-        <FormCard title="Stay dates" step={2} i={2}>
+        <FormCard title="Stay dates" step={3} i={3}>
           <Two>
             <View style={{ flex: 1 }}>
               <Field label="Check-in date"><DateField value={f.checkinDate} onChange={set('checkinDate')} allowClear /></Field>
@@ -466,7 +470,7 @@ export default function BookingForm() {
           ) : null}
         </FormCard>
 
-        <FormCard title="Guests" step={3} i={3}
+        <FormCard title="Guests" step={4} i={4}
           note={`${nGuests} guest${nGuests === 1 ? '' : 's'} · type a name to pick from past stays · ` +
             (editing ? 'ID front is required, back optional' : 'IDs upload when the booking is saved')}>
           {Array.from({ length: nGuests }, (_, i) => {
@@ -543,7 +547,7 @@ export default function BookingForm() {
         </FormCard>
 
         <View onLayout={onCard('money')}>
-        <FormCard title="Money" step={4} i={4}>
+        <FormCard title="Money" step={5} i={5}>
           {/* List price and discount are no longer asked for; values already on
               a booking are still carried through on save untouched. */}
           <Two>
@@ -576,7 +580,7 @@ export default function BookingForm() {
         </FormCard>
         </View>
 
-        <FormCard title="Notes" step={5} i={5}>
+        <FormCard title="Notes" step={6} i={6}>
           <Field label="Notes"><TxtInput value={f.notes} onChange={set('notes')} placeholder="Anything worth remembering" /></Field>
         </FormCard>
 
@@ -585,7 +589,7 @@ export default function BookingForm() {
             one-off steps; an existing one shows the live checklist, which
             saves tick by tick rather than with this form's Save. */}
         {s.logs?.checklist ? (
-          <FormCard title="Checklist" step={6} i={6}
+          <FormCard title="Checklist" step={7} i={7}
             note={editing ? 'Saved as you tick — not part of “Save changes”.' : 'Steps the property manager will work through for this booking.'}>
             {editing && s.editB
               ? <BookingChecklist row={s.editB.row} bare />
