@@ -246,12 +246,6 @@ function Root() {
             />
             <View style={{ flex: 1 }}>
               <Text style={st.title} numberOfLines={1}>Roam in Heels</Text>
-              <Text style={st.sub} numberOfLines={1}>
-                {/* No property here: this header sits above every tab, and the
-                    Report's filter does not apply to the others. */}
-                {(s.me ? s.me.username + ' · ' + s.me.role + ' · ' : '') +
-                  (s.dash?.generatedAt ? 'updated ' + s.dash.generatedAt : 'Property P&L')}
-              </Text>
             </View>
           </View>
           {/* Unit photos, one tap from home: "send me pictures of 3028". */}
