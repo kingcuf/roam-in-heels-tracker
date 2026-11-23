@@ -265,6 +265,10 @@ export default {
         case 'addChecklistItem':    out = await addChecklistItem(env, me, payload); break;
         case 'removeChecklistItem': out = await removeChecklistItem(env, me, payload); break;
         case 'tickChecklist':       out = await tickChecklist(env, me, row, payload); break;
+        case 'saveTemplate':        out = await saveTemplate(env, me, payload); break;
+        case 'removeTemplate':      out = await removeTemplate(env, me, payload); break;
+        case 'setPropertyFacts':    out = await setPropertyFacts(env, me, payload); break;
+        case 'logMessageSend':      out = await logMessageSend(env, me, row, payload); break;
         case 'setTarget':      out = await setTarget(env, me, payload); break;
         case 'properties':     out = await getProperties(env, pin); break;
         case 'addBooking':     out = await addBooking(env, pin, payload); break;
@@ -471,6 +475,7 @@ const PROPERTY_NAME_REFS = [
   ['inv_items', 'property'],
   ['enquiries', 'property'],
   ['checklist_items', 'property'],
+  ['property_facts', 'property'],
   ['revenue_targets', 'scope'],
 ];
 
@@ -478,6 +483,10 @@ async function renamePropertyRefs(env, oldName, newName) {
   if (!oldName || !newName || oldName === newName) return 0;
   const stmts = PROPERTY_NAME_REFS.map(([t, c]) =>
     env.DB.prepare(`UPDATE ${t} SET ${c} = ? WHERE ${c} = ?`).bind(newName, oldName));
+  /* Message templates hold their units as a JSON array of names. */
+  stmts.push(env.DB.prepare(
+    `UPDATE message_templates SET properties = REPLACE(properties, json_quote(?), json_quote(?))
+      WHERE properties LIKE '%' || json_quote(?) || '%'`).bind(oldName, newName, oldName));
   const res = await env.DB.batch(stmts);   // one transaction: all tables move together
   return res.reduce((n, r) => n + ((r.meta && r.meta.changes) || 0), 0);
 }
@@ -911,6 +920,7 @@ async function deleteRowById(env, pin, table, row, message) {
     await env.DB.batch([
       env.DB.prepare('DELETE FROM checklist_ticks WHERE booking_row = ?').bind(row),
       env.DB.prepare('DELETE FROM checklist_items WHERE booking_row = ?').bind(row),
+      env.DB.prepare('DELETE FROM message_sends WHERE booking_row = ?').bind(row),
     ]);
   }
   return { ok: true, message };
@@ -1209,6 +1219,137 @@ async function tickChecklist(env, me, row, d) {
   return { ok: true, message: 'Marked not done' };
 }
 
+/* ─────────────── MESSAGE LIBRARY ───────────────
+   Reusable WhatsApp messages. A template is text with {variables}; the app
+   fills them from the booking (guest, dates…) and from the unit's facts
+   (Wi-Fi, address, contacts…), so each fact is typed once, on the unit.
+   Writing templates and facts is Admin-only. Sending is anyone who can see
+   bookings: the app opens WhatsApp and records the send here — WhatsApp
+   reports nothing back, so a send means "opened in WhatsApp by <user>". */
+const MESSAGE_STAGES = new Set(['before', 'checkin', 'stay', 'checkout', 'any']);
+const MESSAGE_AUDIENCES = new Set(['guest', 'host']);
+const MESSAGE_RECIPIENTS = new Set(['guest', 'host', 'manager', 'other']);
+const FACT_KEY_RE = /^[a-z][a-z0-9_]{0,39}$/;
+
+async function messagesData(env) {
+  const t = await env.DB.prepare(
+    `SELECT id, title, body, stage, audience, properties, preset, sort, updated_at, updated_by
+       FROM message_templates WHERE removed_at = '' ORDER BY sort, id`).all();
+  const f = await env.DB.prepare('SELECT property, key, label, value FROM property_facts ORDER BY property, rowid').all();
+  const sends = await env.DB.prepare(
+    'SELECT booking_row, template_id, recipient, sent_by, sent_at FROM message_sends ORDER BY id').all();
+  const templates = (t.results || []).map((x) => {
+    let props = [];
+    try { props = JSON.parse(x.properties || '[]'); } catch (e) { props = []; }
+    return { ...x, properties: Array.isArray(props) ? props : [] };
+  });
+  return { templates, facts: f.results || [], sends: sends.results || [] };
+}
+
+async function saveTemplate(env, me, d) {
+  if (!me.isAdmin) bad('Only an Admin can change the message library');
+  const title = clip(d.title, 80);
+  if (!title) bad('Give the message a name');
+  const body = String(d.body || '').slice(0, 4000);
+  if (!body.trim()) bad('The message is empty');
+  const stage = String(d.stage || 'any');
+  if (!MESSAGE_STAGES.has(stage)) bad('Unknown stage: ' + stage);
+  const audience = String(d.audience || 'guest');
+  if (!MESSAGE_AUDIENCES.has(audience)) bad('Unknown audience: ' + audience);
+  const preset = String(d.preset || '');
+  if (preset && (!CHECKLIST_PRESETS[preset] || LINKED_PRESETS.has(preset))) bad('That checklist step cannot be linked to a message');
+  const list = Array.isArray(d.properties) ? d.properties.map((x) => clip(x, 120)).filter(Boolean) : [];
+  if (list.length) {
+    const known = await env.DB.prepare('SELECT name FROM properties').all();
+    const names = new Set((known.results || []).map((r) => r.name));
+    for (const n of list) if (!names.has(n)) bad('Unknown property: ' + n);
+  }
+  const now = new Date().toISOString();
+  const props = JSON.stringify([...new Set(list)]);
+  if (d.id) {
+    const id = Number(d.id); checkRow(id);
+    const res = await env.DB.prepare(
+      `UPDATE message_templates SET title = ?, body = ?, stage = ?, audience = ?, properties = ?, preset = ?,
+              updated_at = ?, updated_by = ? WHERE id = ? AND removed_at = ''`)
+      .bind(title, body, stage, audience, props, preset, now, me.username, id).run();
+    if (!res.meta.changes) bad('Message not found');
+    return { ok: true, message: 'Message saved', id };
+  }
+  const n = await env.DB.prepare('SELECT COALESCE(MAX(sort), 0) + 1 AS n FROM message_templates').first();
+  const r = await env.DB.prepare(
+    `INSERT INTO message_templates (title, body, stage, audience, properties, preset, sort, created_at, created_by, updated_at, updated_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(title, body, stage, audience, props, preset, n.n, now, me.username, now, me.username).run();
+  return { ok: true, message: 'Message added', id: r.meta.last_row_id };
+}
+
+async function removeTemplate(env, me, d) {
+  if (!me.isAdmin) bad('Only an Admin can change the message library');
+  const id = Number(d.id); checkRow(id);
+  /* Soft, so past sends still name the message they were. */
+  const res = await env.DB.prepare(`UPDATE message_templates SET removed_at = ? WHERE id = ? AND removed_at = ''`)
+    .bind(new Date().toISOString(), id).run();
+  if (!res.meta.changes) bad('Message not found');
+  return { ok: true, message: 'Message removed' };
+}
+
+/* Replaces a unit's facts wholesale: [{key, label, value}]. */
+async function setPropertyFacts(env, me, d) {
+  if (!me.isAdmin) bad('Only an Admin can change a unit’s guest info');
+  const property = clip(d.property, 120);
+  const p = await env.DB.prepare('SELECT 1 FROM properties WHERE name = ?').bind(property).first();
+  if (!p) bad('Unknown property: ' + property);
+  const list = Array.isArray(d.facts) ? d.facts : [];
+  if (list.length > 60) bad('Too many facts on one unit');
+  const seen = new Set();
+  const now = new Date().toISOString();
+  const rows = [];
+  for (const x of list) {
+    const key = String((x && x.key) || '').trim();
+    if (!FACT_KEY_RE.test(key)) bad('Invalid fact name: ' + key);
+    if (seen.has(key)) bad('Fact listed twice: ' + key);
+    seen.add(key);
+    const value = String((x && x.value) || '').slice(0, 1000);
+    if (!value.trim()) continue;   // a blank fact is simply not stored
+    rows.push(env.DB.prepare(
+      'INSERT INTO property_facts (property, key, label, value, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?)')
+      .bind(property, key, clip((x && x.label) || '', 60), value, now, me.username));
+  }
+  await env.DB.batch([env.DB.prepare('DELETE FROM property_facts WHERE property = ?').bind(property), ...rows]);
+  return { ok: true, message: 'Guest info saved for ' + property };
+}
+
+async function logMessageSend(env, me, row, d) {
+  checkRow(row);
+  const id = Number(d.template); checkRow(id);
+  const recipient = String(d.recipient || 'guest');
+  if (!MESSAGE_RECIPIENTS.has(recipient)) bad('Unknown recipient');
+  const t = await env.DB.prepare('SELECT preset FROM message_templates WHERE id = ?').bind(id).first();
+  if (!t) bad('Message not found');
+  const b = await env.DB.prepare('SELECT property, stay_property FROM bookings WHERE id = ?').bind(row).first();
+  if (!b) bad('Booking not found');
+  const now = new Date().toISOString();
+  const stmts = [env.DB.prepare(
+    'INSERT INTO message_sends (booking_row, template_id, recipient, sent_by, sent_at) VALUES (?, ?, ?, ?, ?)')
+    .bind(row, id, recipient, me.username, now)];
+  /* A message linked to a checklist step ticks that step on this booking —
+     only when it went to the guest, which is what the step is about. */
+  let ticked = false;
+  if (t.preset && recipient === 'guest' && !LINKED_PRESETS.has(t.preset)) {
+    const it = await env.DB.prepare(
+      `SELECT id FROM checklist_items WHERE property = ? AND preset = ? AND booking_row = 0 AND removed_at = ''`)
+      .bind(b.stay_property || b.property, t.preset).first();
+    if (it) {
+      ticked = true;
+      stmts.push(env.DB.prepare(
+        `INSERT INTO checklist_ticks (booking_row, item_id, done_by, done_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(booking_row, item_id) DO NOTHING`).bind(row, it.id, me.username, now));
+    }
+  }
+  await env.DB.batch(stmts);
+  return { ok: true, message: ticked ? 'Sent · checklist ticked' : 'Sent', ticked };
+}
+
 /* ─────────────── REVIEW FOLLOW-UPS ───────────────
    Approach B: the state lives on the booking so a follow-up can be cleared.
    'pending' is stored as '' — the same value every pre-existing row already has,
@@ -1306,7 +1447,10 @@ async function getLogs(env, pin) {
        request per card to find out which object to ask for. */
     idDocs: await idDocs(env),
     /* Booking checklists: steps and ticks, for the booking page. */
-    checklist: await checklistData(env)
+    checklist: await checklistData(env),
+    /* Message library, unit facts and sends, for the booking page's Messages tab. */
+    /* Guarded: a missing table must never take the whole logs call down. */
+    messages: await messagesData(env).catch(() => undefined)
   };
 }
 

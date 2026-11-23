@@ -488,7 +488,10 @@ export function Segmented({ segments, value, onChange }: {
             key={sg.key} activeOpacity={0.8} onPress={() => onChange(sg.key)}
             style={st.seg}
           >
-            <Text style={[st.segLbl, active && st.segLblActive]}>{sg.label}</Text>
+            {/* Six segments (an Admin's Add tab) leave ~59 px each on a 390 px
+                phone: a size down keeps "Inventory" and "Messages" on one line. */}
+            <Text style={[st.segLbl, segments.length > 5 && { fontSize: 11.5, letterSpacing: -0.2 }, active && st.segLblActive]}
+              numberOfLines={1}>{sg.label}</Text>
             {sg.dot && <View style={st.segDot} />}
           </TouchableOpacity>
         );

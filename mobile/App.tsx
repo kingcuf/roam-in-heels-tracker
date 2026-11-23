@@ -27,6 +27,7 @@ import Properties from './src/screens/Properties';
 import Inventory from './src/screens/Inventory';
 import IdSheet from './src/screens/IdSheet';
 import BookingPage from './src/screens/BookingPage';
+import MessageLibrary from './src/screens/MessageLibrary';
 import TeamScreen from './src/screens/TeamScreen';
 import IntroFilm from './src/intro/IntroFilm';
 import { markIntroPlayed, shouldPlayIntro } from './src/intro/policy';
@@ -54,6 +55,7 @@ const ADD_SEGMENTS: { key: AddSeg; label: string }[] = [
   { key: 'sav', label: 'Saving' },
   { key: 'prop', label: 'Property' },
   { key: 'inv', label: 'Inventory' },
+  { key: 'msg', label: 'Messages' },
 ];
 
 /* One Add segment: the form, with its record log a tap away behind the
@@ -121,6 +123,10 @@ function AddContainer() {
       {/* Inventory keeps its own items/movements handling internally. */}
       {s.addSegs.includes('inv') && (
         <View style={[{ flex: 1 }, s.addSeg !== 'inv' && st.hidden]}><Inventory /></View>
+      )}
+      {/* The message library (Admin only — see store.addSegs). */}
+      {s.addSegs.includes('msg') && (
+        <View style={[{ flex: 1 }, s.addSeg !== 'msg' && st.hidden]}><MessageLibrary /></View>
       )}
     </View>
   );

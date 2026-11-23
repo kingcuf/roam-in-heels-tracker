@@ -8,6 +8,7 @@ import { Field, TxtInput, SelectField, DateField } from '../fields';
 import { api } from '../api';
 import TicketBanner, { NoAdd, writeLabels } from './TicketBanner';
 import { PropertyChecklistEditor } from '../checklist';
+import { UnitFactsEditor } from '../messages';
 
 const EMPTY = { name: '', id: '', location: '', type: '', status: 'Active', onboarded: '', rent: '', notes: '' };
 
@@ -167,6 +168,12 @@ export default function PropertyForm() {
           <FormCard title="Booking checklist" step={4} i={4}
             note="What the property manager works through for every booking here. Changes apply to upcoming bookings straight away.">
             <PropertyChecklistEditor property={String(s.editP.prop.name)} />
+          </FormCard>
+        ) : null}
+        {editing && s.me?.role === 'Admin' && s.editP?.prop?.name ? (
+          <FormCard title="Guest info" step={5} i={5}
+            note="The details your messages fill in for this unit — Wi-Fi, address, contacts. Saved on its own, separately from the property.">
+            <UnitFactsEditor property={String(s.editP.prop.name)} />
           </FormCard>
         ) : null}
       <FormFooter

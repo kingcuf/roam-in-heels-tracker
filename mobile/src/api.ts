@@ -112,6 +112,14 @@ export const api = {
   removeChecklistItem: (pin: string, id: number) => call('removeChecklistItem', { pin, payload: { id } }),
   tickChecklist: (pin: string, row: number, item: number, done: boolean) =>
     call('tickChecklist', { pin, row, payload: { item, done } }),
+  /* Message library (Admin) and sends (anyone who can see the booking). */
+  saveTemplate: (pin: string, d: { id?: number; title: string; body: string; stage: string; audience: string; properties: string[]; preset: string }) =>
+    call('saveTemplate', { pin, payload: d }) as Promise<{ ok: boolean; message: string; id: number }>,
+  removeTemplate: (pin: string, id: number) => call('removeTemplate', { pin, payload: { id } }),
+  setPropertyFacts: (pin: string, property: string, facts: { key: string; label: string; value: string }[]) =>
+    call('setPropertyFacts', { pin, payload: { property, facts } }),
+  logMessageSend: (pin: string, row: number, template: number, recipient: 'guest' | 'host' | 'manager' | 'other') =>
+    call('logMessageSend', { pin, row, payload: { template, recipient } }) as Promise<{ ok: boolean; message: string; ticked: boolean }>,
   /* Daily revenue targets, keyed by Report scope ('All' or a property name).
      daily = null removes the target for that scope. Admin only to set. */
   getTargets: (pin: string) =>

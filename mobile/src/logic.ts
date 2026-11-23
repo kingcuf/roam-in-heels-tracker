@@ -2,7 +2,7 @@
 // These run over the raw getLogs() blocks, exactly like the website does.
 
 export type LogBlock = { headers: string[]; rows: { r: number; cells: any[] }[] };
-export type Logs = { bookings: LogBlock; expenses: LogBlock; savings?: LogBlock; tasks?: LogBlock; enquiries?: LogBlock; checklist?: ChecklistData };
+export type Logs = { bookings: LogBlock; expenses: LogBlock; savings?: LogBlock; tasks?: LogBlock; enquiries?: LogBlock; checklist?: ChecklistData; messages?: MessagesData };
 
 export const CI_MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
@@ -1416,6 +1416,8 @@ export const CHECKLIST_PRESETS: { key: string; label: string; stage: ChecklistSt
   { key: 'extend', label: 'Asked about extending the stay', stage: 'checkout' },
   { key: 'review', label: 'Asked for review', stage: 'checkout', linked: 'Ticks itself when the review is marked requested.' },
 ];
+/* Steps a message can tick when sent — the linked ones tick themselves. */
+export const LINKABLE_PRESETS = CHECKLIST_PRESETS.filter((p) => !p.linked);
 export type ChecklistItemRow = {
   id: number; property: string; booking_row: number; preset: string; label: string;
   stage: ChecklistStage; sort: number; created_at: string; removed_at: string;
@@ -1521,3 +1523,154 @@ export function ageFrom(birthYr: any, now: Date = new Date()): string {
   if (!y || y < 1900 || y > now.getFullYear()) return '';
   return String(now.getFullYear() - y);
 }
+
+/* ── Message library ───────────────────────────────────────────────────────
+   A template is text with {variables}. Booking variables come off the booking
+   row; unit variables are the "guest info" facts an Admin keeps on each unit.
+   A booking value wins over the unit's (a booked 1 pm arrival beats the
+   standard 2 pm), and a variable with no value anywhere is reported as
+   missing — never sent as a raw {wifi_password}. */
+export type MessageStage = 'before' | 'checkin' | 'stay' | 'checkout' | 'any';
+export type MessageAudience = 'guest' | 'host';
+export const MESSAGE_STAGES: { key: MessageStage; label: string }[] = [
+  { key: 'before', label: 'Before check-in' },
+  { key: 'checkin', label: 'Check-in' },
+  { key: 'stay', label: 'During stay' },
+  { key: 'checkout', label: 'Check-out' },
+  { key: 'any', label: 'Anytime' },
+];
+export type MessageTemplate = {
+  id: number; title: string; body: string; stage: MessageStage; audience: MessageAudience;
+  properties: string[]; preset: string; sort: number; updated_at?: string; updated_by?: string;
+};
+export type PropertyFact = { property: string; key: string; label: string; value: string };
+export type MessageSend = { booking_row: number; template_id: number; recipient: string; sent_by: string; sent_at: string };
+export type MessagesData = { templates: MessageTemplate[]; facts: PropertyFact[]; sends: MessageSend[] };
+
+/* The unit facts the app knows by name. Anything else an Admin adds is a
+   custom fact ({door_code}, {parking_slot} …). */
+export const UNIT_FACTS: { key: string; label: string; hint: string; multiline?: boolean }[] = [
+  { key: 'address', label: 'Address', hint: 'Tower B, Flat 3028, Spira, Sector 68', multiline: true },
+  { key: 'map_link', label: 'Google Maps link', hint: 'https://maps.app.goo.gl/…' },
+  { key: 'wifi_name', label: 'Wi-Fi name', hint: 'Spira_3028' },
+  { key: 'wifi_password', label: 'Wi-Fi password', hint: '' },
+  { key: 'checkin_time', label: 'Standard check-in time', hint: '2:00 PM' },
+  { key: 'checkout_time', label: 'Standard check-out time', hint: '11:00 AM' },
+  { key: 'host_name', label: 'Host name', hint: '' },
+  { key: 'host_phone', label: 'Host mobile', hint: '98XXXXXXXX' },
+  { key: 'manager_name', label: 'Property manager name', hint: '' },
+  { key: 'manager_phone', label: 'Property manager mobile', hint: '98XXXXXXXX' },
+];
+
+/* Every variable a template can use, in the order the editor offers them. */
+export const MESSAGE_VARS: { key: string; label: string; group: 'Guest' | 'Stay' | 'Unit' }[] = [
+  { key: 'guest_first_name', label: 'Guest first name', group: 'Guest' },
+  { key: 'guest_name', label: 'Guest full name', group: 'Guest' },
+  { key: 'guest_phone', label: 'Guest mobile', group: 'Guest' },
+  { key: 'co_guest', label: 'Co-guest', group: 'Guest' },
+  { key: 'guests', label: 'No. of guests', group: 'Guest' },
+  { key: 'checkin_date', label: 'Check-in date', group: 'Stay' },
+  { key: 'checkin_time', label: 'Check-in time', group: 'Stay' },
+  { key: 'checkout_date', label: 'Check-out date', group: 'Stay' },
+  { key: 'checkout_time', label: 'Check-out time', group: 'Stay' },
+  { key: 'nights', label: 'Nights', group: 'Stay' },
+  { key: 'booking_id', label: 'Booking ID', group: 'Stay' },
+  { key: 'unit', label: 'Unit number', group: 'Unit' },
+  { key: 'property', label: 'Property name', group: 'Unit' },
+  ...UNIT_FACTS.filter((f) => f.key !== 'checkin_time' && f.key !== 'checkout_time')
+    .map((f) => ({ key: f.key, label: f.label, group: 'Unit' as const })),
+];
+export const FACT_KEY_RE = /^[a-z][a-z0-9_]{0,39}$/;
+/* 'Door code' -> 'door_code' */
+export const factKeyOf = (label: string) =>
+  String(label || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^[^a-z]+|_+$/g, '').slice(0, 40);
+
+export const factsOf = (data: MessagesData | undefined, property: string): Record<string, string> => {
+  const out: Record<string, string> = {};
+  for (const f of data?.facts || []) if (f.property === property) out[f.key] = f.value;
+  return out;
+};
+
+const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const fmtLong = (d: Date | null) => (d ? DOW[d.getDay()] + ', ' + ciFmtDay(d) : '');
+
+/* The values a booking supplies, unit facts underneath. Blank = not known. */
+export function messageValues(o: { r: number; cells: any[] }, facts: Record<string, string>): Record<string, string> {
+  const c = o.cells;
+  const b = cardOf(o);
+  const name = String(b.guest || '').trim();
+  const v: Record<string, string> = { ...facts };
+  const put = (k: string, x: any) => { const t = String(x ?? '').trim(); if (t) v[k] = t; };
+  put('guest_name', name);
+  put('guest_first_name', name.split(/\s+/)[0] || '');
+  put('guest_phone', c[13]);
+  put('co_guest', b.coGuest);
+  put('guests', b.guests || '');
+  put('checkin_date', fmtLong(b.inD));
+  put('checkout_date', fmtLong(b.outD));
+  put('checkin_time', b.inT);       // a time on the booking beats the unit's standard one
+  put('checkout_time', b.outT);
+  put('nights', b.nights ? String(b.nights) : '');
+  put('booking_id', b.id);
+  put('unit', bannerUnitOf(c));
+  put('property', stayPropOf(c));
+  return v;
+}
+
+/* Fill a template. `missing` lists each unknown variable once, in order. */
+export function renderMessage(body: string, values: Record<string, string>): { text: string; missing: string[] } {
+  const missing: string[] = [];
+  const text = String(body || '').replace(/\{([a-z][a-z0-9_]*)\}/g, (m, k) => {
+    const x = values[k];
+    if (x !== undefined && x !== '') return x;
+    if (missing.indexOf(k) < 0) missing.push(k);
+    return m;
+  });
+  return { text, missing };
+}
+export const varLabel = (key: string, facts?: PropertyFact[]) =>
+  (MESSAGE_VARS.find((x) => x.key === key) || UNIT_FACTS.find((x) => x.key === key))?.label
+  || facts?.find((f) => f.key === key)?.label || key.replace(/_/g, ' ');
+
+/* Which templates apply to a booking: those for every unit, or naming the
+   unit the guest stays in. Ordered with the stage that is due now first. */
+export function messagesFor(o: { r: number; cells: any[] }, data: MessagesData | undefined, now: Date = new Date()) {
+  if (!data) return { list: [] as MessageTemplate[], due: 'any' as MessageStage };
+  const prop = stayPropOf(o.cells);
+  const b = cardOf(o);
+  const ph = stayPhase(b.inD, b.outD, now).phase;
+  const due: MessageStage = ph === 'upcoming' ? 'before' : ph === 'arriving' ? 'checkin'
+    : ph === 'inhouse' ? 'stay' : ph === 'leaving' || ph === 'past' ? 'checkout' : 'any';
+  const order = MESSAGE_STAGES.map((x) => x.key);
+  const rank = (t: MessageTemplate) => (t.stage === due ? -1 : order.indexOf(t.stage));
+  const list = data.templates
+    .filter((t) => !t.properties.length || t.properties.indexOf(prop) >= 0)
+    .sort((a, b2) => rank(a) - rank(b2) || a.sort - b2.sort || a.id - b2.id);
+  return { list, due };
+}
+
+/* wa.me wants digits with the country code; a bare 10-digit number is Indian. */
+export function waNumber(phone: string): string {
+  const d = String(phone || '').replace(/[^\d]/g, '').replace(/^0+/, '');
+  return d.length === 10 ? '91' + d : d;
+}
+export const waLink = (phone: string, text: string) =>
+  'https://wa.me/' + waNumber(phone) + '?text=' + encodeURIComponent(text);
+
+/* Starter library offered when it is empty — good defaults, edited freely. */
+export const STARTER_MESSAGES: Omit<MessageTemplate, 'id' | 'sort'>[] = [
+  { title: 'Booking confirmed', stage: 'before', audience: 'guest', properties: [], preset: '',
+    body: 'Hi {guest_first_name}! 🙏 Thank you for booking unit {unit} with Roam in Heels.\n\nYour stay: {checkin_date} → {checkout_date} ({nights} nights)\nCheck-in from {checkin_time} · Check-out by {checkout_time}\n\nPlease share a photo of a government ID for each guest before arrival. See you soon!' },
+  { title: 'Unit details & directions', stage: 'before', audience: 'guest', properties: [], preset: 'unit_details',
+    body: 'Hi {guest_first_name}, here are the details for your stay 🏡\n\n📍 {address}\nMap: {map_link}\n\nCheck-in from {checkin_time} on {checkin_date}.\nFor anything on the day, call {manager_name} on {manager_phone}.' },
+  { title: 'Wi-Fi', stage: 'checkin', audience: 'guest', properties: [], preset: '',
+    body: 'Welcome in, {guest_first_name}! 📶\n\nWi-Fi: {wifi_name}\nPassword: {wifi_password}\n\nEnjoy your stay!' },
+  { title: 'How is your stay?', stage: 'stay', audience: 'guest', properties: [], preset: '',
+    body: 'Hi {guest_first_name}, hope you are settling in well at {unit}. Is there anything you need? Just reply here 😊' },
+  { title: 'Check-out reminder + extend', stage: 'checkout', audience: 'guest', properties: [], preset: 'extend',
+    body: 'Hi {guest_first_name}, a quick reminder that check-out is by {checkout_time} on {checkout_date}.\n\nEnjoying the place? We can extend your stay if the unit is free — just reply and we will check for you.' },
+  { title: 'Thank you + review', stage: 'checkout', audience: 'guest', properties: [], preset: '',
+    body: 'Thank you for staying with us, {guest_first_name}! 🌟 If you enjoyed it, a review would mean a lot to us. Safe travels!' },
+  { title: 'New booking (for host)', stage: 'any', audience: 'host', properties: [], preset: '',
+    body: 'New booking for {unit}: {guest_name} ({guests} guests)\n{checkin_date} {checkin_time} → {checkout_date} {checkout_time}\nBooking ID {booking_id} · Guest mobile {guest_phone}' },
+];

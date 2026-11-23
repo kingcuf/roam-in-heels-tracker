@@ -10,7 +10,7 @@ import { useToast } from './ui';
 // directly beneath the form; Team holds change requests, users and rights.
 // Which of these a user sees depends on their role's rights.
 export type Tab = 'action' | 'cal' | 'dash' | 'add' | 'team';
-export type AddSeg = 'book' | 'exp' | 'sav' | 'prop' | 'inv';
+export type AddSeg = 'book' | 'exp' | 'sav' | 'prop' | 'inv' | 'msg';
 // Retained: identifies which log a pending edit came from, and which log block
 // an embedded LogsScreen should render.
 export type LogSeg = 'blog' | 'elog' | 'slog' | 'prop';
@@ -90,7 +90,7 @@ const REPORT_PARTS: LoadParts = { dash: true, logs: false, inv: false, tickets: 
 
 /* Tab → the right that shows it. Add and Team are decided by rights().*/
 const TAB_RIGHT: Partial<Record<Tab, string>> = { action: 'action.view', cal: 'calendar.view', dash: 'reports.view' };
-export const SEG_ENTITY: Record<AddSeg, string> = { book: 'booking', exp: 'expense', sav: 'saving', prop: 'property', inv: 'inventory' };
+export const SEG_ENTITY: Record<AddSeg, string> = { book: 'booking', exp: 'expense', sav: 'saving', prop: 'property', inv: 'inventory', msg: 'messages' };
 
 type StoreT = {
   pin: string;
@@ -273,7 +273,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const can = (k: string) => rights.indexOf(k) >= 0;
   const canAny = (entity: string) => ['add', 'update', 'delete'].some((op) => can(entity + '.' + op));
-  const addSegs = (['book', 'exp', 'sav', 'prop', 'inv'] as AddSeg[]).filter((sg) => canAny(SEG_ENTITY[sg]));
+  /* Messages is the message library — written by Admins only (sending
+     happens on the booking page, for anyone who can see bookings). */
+  const addSegs = (['book', 'exp', 'sav', 'prop', 'inv', 'msg'] as AddSeg[]).filter((sg) =>
+    sg === 'msg' ? me?.role === 'Admin' : canAny(SEG_ENTITY[sg]));
   const tabs = (['action', 'cal', 'dash', 'add', 'team'] as Tab[]).filter((t) =>
     t === 'add' ? addSegs.length > 0 : t === 'team' ? true : can(TAB_RIGHT[t]!));
 

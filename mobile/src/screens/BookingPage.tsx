@@ -11,6 +11,7 @@ import { useStore } from '../store';
 import { api } from '../api';
 import { Btn } from '../ui';
 import { BookingChecklist } from '../checklist';
+import { BookingMessages } from '../messages';
 import {
   ageFrom, bannerUnitOf, cardOf, checklistFor, ciFmtDay, ciNum, ciParse, idSlotsOf, IdSlot, parseExtraGuests,
   reviewStatusOf, splitOf, stayPhase, StayPhase, stayPropOf,
@@ -96,7 +97,7 @@ function PageBody({ row, onClose }: { row: number; onClose: () => void }) {
   const s = useStore();
   const insets = useSafeAreaInsets();
   const { width: pageW } = useWindowDimensions();
-  const [tab, setTab] = useState<'details' | 'checklist'>('details');
+  const [tab, setTab] = useState<'details' | 'checklist' | 'messages'>('details');
   useEffect(() => { setTab('details'); }, [row]);
 
   const o = (s.logs?.bookings?.rows || []).find((y) => y.r === row) || null;
@@ -213,6 +214,7 @@ function PageBody({ row, onClose }: { row: number; onClose: () => void }) {
             badge={entries.length ? doneN + '/' + entries.length : undefined}
             complete={!!entries.length && doneN === entries.length}
           />
+          <TabBtn label="Messages" on={tab === 'messages'} onPress={() => setTab('messages')} />
         </View>
       </View>
 
@@ -220,10 +222,12 @@ function PageBody({ row, onClose }: { row: number; onClose: () => void }) {
       <View style={st.body}>
         {tab === 'details' ? (
           <Details row={row} c={c} b={b} stayProp={stayProp} split={split} unit={unit} />
-        ) : (
+        ) : tab === 'checklist' ? (
           <View style={st.card}>
             <BookingChecklist row={row} bare />
           </View>
+        ) : (
+          <BookingMessages row={row} />
         )}
         {canChange && tab === 'details' ? (
           <Btn title={editLabel} onPress={edit} style={{ marginTop: 18 }} />
