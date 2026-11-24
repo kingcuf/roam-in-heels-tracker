@@ -110,10 +110,12 @@ export default function ActionScreen() {
   const [selPay, setSelPay] = useState<Record<number, boolean>>({});
   const [revTab, setRevTab] = useState<'pending' | 'requested'>('pending');
   const [enqTab, setEnqTab] = useState<EnquiryStatus>('new');
+  /* Payments are filtered by the platform the money will come from. */
+  const [payCh, setPayCh] = useState('All');
   /* A request raised by a Manager changes nothing until approved, so the page
      keeps a receipt on top and every affected row says it is waiting. */
   const [sent, setSent] = useState<{ msg: string; ids: number[] } | null>(null);
-  useEffect(() => { setSent(null); setSelPay({}); }, [page]);
+  useEffect(() => { setSent(null); setSelPay({}); setPayCh('All'); }, [page]);
   const reqFor = (kind: TicketKind, row: number | string): Ticket | null => {
     const t = s.ticketFor(kind, row);
     return t && t.status === 'pending' ? t : null;
@@ -169,6 +171,29 @@ export default function ActionScreen() {
   /* ── writes ── */
   const selRows = pay.list.filter((p) => selPay[p.row] && !reqFor('payout', p.row));
   const selTotal = selRows.reduce((t, p) => t + p.pending, 0);
+  /* Payments by platform: Airbnb pays out on its own schedule, Booking.com on
+     another, a host settles in cash. Each is chased (and marked paid) apart. */
+  const payGroups = useMemo(() => {
+    const m: Record<string, { label: string; fg: string; bg: string; items: typeof pay.list; total: number }> = {};
+    pay.list.forEach((p) => {
+      const pl = platformOf(p.card.channel) || { ...PLATFORM.direct, label: 'No platform' };
+      const g = m[pl.label] || (m[pl.label] = { ...pl, items: [], total: 0 });
+      g.items.push(p); g.total += p.pending;
+    });
+    const order = ['Airbnb', 'Booking.com', 'Agoda', 'MMT', 'From host', 'Direct'];
+    return Object.values(m).sort((a, b) => {
+      const ia = order.indexOf(a.label), ib = order.indexOf(b.label);
+      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || b.total - a.total;
+    });
+  }, [pay.list]);
+  const payShown = payCh === 'All' ? pay.list : (payGroups.find((g) => g.label === payCh)?.items || []);
+  const payShownTotal = payShown.reduce((t, p) => t + p.pending, 0);
+  const selectable = (list: typeof pay.list) => list.filter((p) => !reqFor('payout', p.row));
+  const allOn = (list: typeof pay.list) => { const l = selectable(list); return l.length > 0 && l.every((p) => selPay[p.row]); };
+  const toggleAll = (list: typeof pay.list) => {
+    const on = allOn(list);
+    setSelPay((m) => { const n = { ...m }; selectable(list).forEach((p) => { n[p.row] = !on; }); return n; });
+  };
   const markPaid = async () => {
     if (!selRows.length) return;
     try {
@@ -241,13 +266,9 @@ export default function ActionScreen() {
         case 'enq': return enq.fresh.length + ' new · ' + enq.all.length + ' total';
       }
     })();
-    const headRight = page === 'pay' && manage && pay.list.length ? (
-      <TouchableOpacity onPress={() => {
-        const all = pay.list.filter((p) => !reqFor('payout', p.row));
-        const on = all.every((p) => selPay[p.row]);
-        setSelPay(on ? {} : Object.fromEntries(all.map((p) => [p.row, true])));
-      }} hitSlop={8}>
-        <Text style={st.headLink}>{pay.list.filter((p) => !reqFor('payout', p.row)).every((p) => selPay[p.row]) ? 'Clear' : 'Select all'}</Text>
+    const headRight = page === 'pay' && manage && payShown.length ? (
+      <TouchableOpacity onPress={() => toggleAll(payShown)} hitSlop={8}>
+        <Text style={st.headLink}>{allOn(payShown) ? 'Clear' : 'Select all'}</Text>
       </TouchableOpacity>
     ) : page === 'act' && manage ? (
       <TouchableOpacity onPress={() => setForm({ task: null })} hitSlop={8}><Text style={st.headLink}>+ Add</Text></TouchableOpacity>
@@ -268,9 +289,27 @@ export default function ActionScreen() {
 
         {page === 'pay' ? (
           <View style={st.sumBar}>
-            <Text style={st.sumLbl}>STILL TO COLLECT</Text>
-            <Text style={st.sumVal}>{inr(pay.total)}</Text>
+            <Text style={st.sumLbl}>{payCh === 'All' ? 'STILL TO COLLECT' : 'TO COLLECT FROM ' + payCh.toUpperCase()}</Text>
+            <Text style={st.sumVal}>{inr(payCh === 'All' ? pay.total : payShownTotal)}</Text>
           </View>
+        ) : null}
+        {page === 'pay' && payGroups.length > 1 ? (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={st.chRow}>
+            {[{ label: 'All', fg: C.ink, bg: '#fff', items: pay.list, total: pay.total }, ...payGroups].map((g) => {
+              const on = g.label === payCh;
+              return (
+                <TouchableOpacity key={g.label} onPress={() => setPayCh(g.label)} activeOpacity={0.8}
+                  style={[st.chTile, on && { borderColor: g.label === 'All' ? C.navy : g.fg, backgroundColor: g.label === 'All' ? '#fff' : g.bg }]}>
+                  <View style={st.chHead}>
+                    {g.label !== 'All' ? <View style={[st.platDot, { backgroundColor: g.fg }]} /> : null}
+                    <Text style={[st.chName, { color: g.label === 'All' ? C.ink : g.fg }]} numberOfLines={1}>{g.label === 'All' ? 'All platforms' : g.label}</Text>
+                  </View>
+                  <Text style={st.chAmt}>{inr(g.total)}</Text>
+                  <Text style={st.chN}>{g.items.length} booking{g.items.length === 1 ? '' : 's'}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
         ) : null}
         {page === 'rev' ? (
           <Seg value={revTab} onChange={(v) => setRevTab(v as any)} options={[
@@ -360,19 +399,34 @@ export default function ActionScreen() {
             );
           })}
 
-          {page === 'pay' && pay.list.map((p) => {
-            const req = reqFor('payout', p.row);
-            const on = !!selPay[p.row] && !req;
-            return (
-              <BRow key={'pay' + p.row} c={p.card} pin={s.pin} docId={docFor(p.row)} focus="none"
-                select={manage && !req ? on : undefined}
-                note={[p.card.paid ? 'Guest paid ' + inr(p.card.paid) : '', 'net ' + inr(p.card.net)].filter(Boolean).join(' · ')}
-                wait={req ? '#' + req.id + ' · marked paid' : undefined}
-                flags={[]} actions={contact(p.card)}
-                onPress={manage && !req ? () => setSelPay((m) => ({ ...m, [p.row]: !m[p.row] })) : () => openBooking(p.row)}
-                onOpen={manage && !req ? () => openBooking(p.row) : undefined} />
-            );
-          })}
+          {page === 'pay' && (payCh === 'All' ? payGroups : payGroups.filter((g) => g.label === payCh)).map((g) => (
+            <View key={g.label}>
+              <View style={st.grpRow}>
+                <View style={[st.platDot, { backgroundColor: g.fg, width: 8, height: 8, borderRadius: 4 }]} />
+                <Text style={st.grpName}>{g.label}</Text>
+                <Text style={st.grpMeta}>{g.items.length} · {inr(g.total)}</Text>
+                <View style={{ flex: 1 }} />
+                {manage && payCh === 'All' && selectable(g.items).length ? (
+                  <TouchableOpacity onPress={() => toggleAll(g.items)} hitSlop={8}>
+                    <Text style={st.grpLink}>{allOn(g.items) ? 'Clear' : 'Select ' + g.label}</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+              {g.items.map((p) => {
+                const req = reqFor('payout', p.row);
+                const on = !!selPay[p.row] && !req;
+                return (
+                  <BRow key={'pay' + p.row} c={p.card} pin={s.pin} docId={docFor(p.row)} focus="none" noPlatform
+                    select={manage && !req ? on : undefined}
+                    note={[p.card.paid ? 'Guest paid ' + inr(p.card.paid) : '', 'net ' + inr(p.card.net)].filter(Boolean).join(' · ')}
+                    wait={req ? '#' + req.id + ' · marked paid' : undefined}
+                    flags={[]} actions={contact(p.card)}
+                    onPress={manage && !req ? () => setSelPay((m) => ({ ...m, [p.row]: !m[p.row] })) : () => openBooking(p.row)}
+                    onOpen={manage && !req ? () => openBooking(p.row) : undefined} />
+                );
+              })}
+            </View>
+          ))}
 
           {page === 'low' && [...low].sort((a, c) => Number(c.outNow) - Number(a.outNow)).map((i) => (
             <LowRow key={'low' + i.r} i={i} onAdd={() => addStock(i)} />
@@ -670,16 +724,17 @@ function Empty({ title, sub, cta }: { title: string; sub?: string; cta?: { label
      what to do      problems as tags, then the buttons that clear them
    Nothing unknown is printed: no "time not recorded", no empty boxes. */
 type Btnish = { label: string; onPress: () => void; solid?: boolean; quiet?: boolean };
-function BRow({ c, pin, docId, focus, note, noteTone, flags, actions, primary, buttons, wait, select, onPress, onOpen }: {
+function BRow({ c, pin, docId, focus, note, noteTone, flags, actions, primary, buttons, wait, select, onPress, onOpen, noPlatform }: {
   c: CardData; pin: string; docId?: number; focus: 'in' | 'out' | 'none';
   note?: string; noteTone?: string; flags: Flag[];
   actions?: Btnish[]; primary?: Btnish; buttons?: Btnish[]; wait?: string;
   select?: boolean; onPress: () => void; onOpen?: () => void;
+  /* On a page already grouped by platform, the badge would only repeat it. */
+  noPlatform?: boolean;
 }) {
   const call = actions?.find((x) => x.label === 'Call');
   const wa = actions?.find((x) => x.label === 'WhatsApp');
   const btns: Btnish[] = [...(buttons || []), ...(primary ? [{ ...primary, solid: true }] : [])];
-  const people = c.guests ? c.guests + (c.guests === 1 ? ' guest' : ' guests') : '';
   return (
     <View style={[st.card, select && st.cardOn]}>
       <TouchableOpacity onPress={onPress} activeOpacity={0.8}>
@@ -691,8 +746,8 @@ function BRow({ c, pin, docId, focus, note, noteTone, flags, actions, primary, b
           <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={st.cName} numberOfLines={1}>{c.guest || c.id || 'Guest'}</Text>
             <View style={st.subRow}>
-              <Platform ch={c.channel} />
-              <Text style={st.cMeta} numberOfLines={1}>Unit {unitOf(c)}{people ? ' · ' + people : ''}</Text>
+              {noPlatform ? null : <Platform ch={c.channel} />}
+              <Text style={st.cMeta} numberOfLines={1}>Unit {unitOf(c)}</Text>
             </View>
           </View>
           {c.pending > 0 ? (
@@ -980,6 +1035,16 @@ const st = StyleSheet.create({
   sumBar: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', backgroundColor: C.redbg, paddingHorizontal: 16, paddingVertical: 11 },
   sumLbl: { fontFamily: F.bold, fontSize: 10, letterSpacing: 1, color: C.red },
   sumVal: { fontFamily: F.xbold, fontSize: 22, color: C.red },
+  chRow: { gap: 8, paddingHorizontal: 14, paddingTop: 12, paddingBottom: 2 },
+  chTile: { minWidth: 118, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 14, backgroundColor: '#fff', borderWidth: 1.5, borderColor: C.hair },
+  chHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  chName: { fontFamily: F.bold, fontSize: 12 },
+  chAmt: { fontFamily: F.xbold, fontSize: 16, color: C.ink, marginTop: 5, letterSpacing: -0.3 },
+  chN: { fontFamily: F.semi, fontSize: 11, color: C.muted, marginTop: 1 },
+  grpRow: { flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 6, marginBottom: 9, marginHorizontal: 2 },
+  grpName: { fontFamily: F.xbold, fontSize: 14, color: C.ink },
+  grpMeta: { fontFamily: F.semi, fontSize: 12, color: C.muted },
+  grpLink: { fontFamily: F.bold, fontSize: 12.5, color: G.gold2 },
   segRow: { gap: 7, paddingHorizontal: 14, paddingTop: 12 },
   segBtn: { paddingVertical: 7, paddingHorizontal: 14, borderRadius: 999, borderWidth: 1, borderColor: C.line, backgroundColor: '#fff' },
   segOn: { backgroundColor: C.navy, borderColor: C.navy },
