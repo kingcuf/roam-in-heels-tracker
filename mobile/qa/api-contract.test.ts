@@ -174,8 +174,11 @@ eq('TASK_COLS[3] is done',                                         TASK_COLS[3],
     eq('INVARIANT ' + decl + ' takes a sequence token', /\+\+logsSeq\.current/.test(body), true);
     eq('INVARIANT ' + decl + ' drops a superseded response',
        /if \(my !== logsSeq\.current\) return;/.test(body), true);
+    /* setLogs now happens inside applyLogs (delta merge); the guard must
+       still come before it. */
+    const apply = body.indexOf('applyLogs(l)');
     eq('INVARIANT ' + decl + ' guards before setLogs',
-       body.indexOf('logsSeq.current) return') < body.indexOf('setLogs(l)'), true);
+       apply > 0 && body.indexOf('logsSeq.current) return') < apply, true);
   }
   /* The overlay does not block the tap that starts the race. */
   eq('PINNED busy overlay is pointerEvents="none"',
@@ -336,7 +339,8 @@ eq('TASK_COLS[3] is done',                                         TASK_COLS[3],
   /* INVARIANT — the stale snapshot is now re-pointed at the rows that just
      arrived, so saving an open edit can no longer replay a cleared amount. */
   eq('INVARIANT reloadLogs resyncs the open edit snapshots',
-     fnBody(StoreSrc, 'const reloadLogs = async').includes('resyncEdits'), true);
+     fnBody(StoreSrc, 'const reloadLogs = async').includes('applyLogs(l)')
+       && fnBody(StoreSrc, 'const applyLogs = ').includes('resyncEdits'), true);
   eq('INVARIANT resyncEdits re-points editB from the new logs', /setEditB\(\(e\) =>/.test(StoreSrc), true);
 }
 
