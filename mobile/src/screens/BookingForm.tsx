@@ -341,15 +341,47 @@ export default function BookingForm() {
   })();
   /* Choosing one of OUR flats: a host picked under "Came from" stays (their
      guest, our flat); a host flat picked under Stay alone is dropped. */
+  /* A host chosen in the Booking card — "Resold to" or "Came from: From host".
+     Choosing our flat under Stay keeps them (their guest, our flat). */
+  const hostInBooking = f.type !== 'Pass' && (f.type === 'Resold' || f.channel === 'From host');
   const toOurUnit = () => {
     setPartner(false);
-    if (deal && deal.unitId) setDeal(f.channel === 'From host' ? { ...deal, unitId: 0 } : null);
+    if (deal && deal.unitId) setDeal(hostInBooking ? { ...deal, unitId: 0 } : null);
   };
   const hostUnitsOf = (id: number) => (hostsData?.units || []).filter((u) => u.host_id === id);
   const pickHostUnit = (u: HostUnit) => {
     setDeal({ hostId: u.host_id, unitId: u.id, collectedBy: deal?.collectedBy || defaultCollector(f.channel) });
     set('stayUnit')(u.unit); setPartner(false);
   };
+  /* The host picker used in the Booking card — under "Came from: From host",
+     or as the "Resold to" field. */
+  const hostBlock = (
+
+            deal && dealHost ? (
+              <View style={[st.picked, { marginTop: -4 }]}>
+                <Text style={st.pickedT}>{dealHost.name}</Text>
+                <Text style={st.pickedS}>{dealHost.phone || 'No mobile saved'}</Text>
+                <TouchableOpacity onPress={() => { setDeal(null); if (f.type === 'Resold') set('referrer')(''); if (dealUnit) { set('stayUnit')(''); setPartner(false); } }} hitSlop={8} style={st.pickedX}><Text style={st.link}>Change</Text></TouchableOpacity>
+              </View>
+            ) : (
+              <FromHostPick data={hostsData} askUnit={f.type !== 'Stay'} resold={f.type === 'Resold'} onPick={(h) => {
+                const us = hostUnitsOf(h.id);
+                if (f.type === 'Resold') set('referrer')(h.name);
+                /* A Stay is in our flat — never auto-pick the host's unit for it. */
+                if (f.type !== 'Stay' && us.length === 1) pickHostUnit(us[0]);
+                else {
+                  setDeal({ hostId: h.id, unitId: 0, collectedBy: defaultCollector(f.channel) });
+                  /* Resold: the guest sleeps in one of their flats — open that choice under Stay. */
+                  if (f.type === 'Resold' && us.length) { setPartner(true); set('stayUnit')(''); }
+                }
+              }} onCreated={async (hostId, unitId, unit, name) => {
+                await s.reloadLogs();
+                if (f.type === 'Resold') set('referrer')(name);
+                setDeal({ hostId, unitId, collectedBy: defaultCollector(f.channel) });
+                if (unitId) { set('stayUnit')(unit); setPartner(false); }
+              }} />
+            )
+  );
   /* Live, like the auto-commission line: what each unit ends up with, on the
      figures currently in the boxes. Preview only — the Worker resolves and
      freezes the real split at save time, using the same rule. */
@@ -424,6 +456,10 @@ export default function BookingForm() {
         <View onLayout={onCard('booking')}>
         {/* 1 · The booking: what it is, where it came from, which of our units it was booked for. */}
         <FormCard title="Booking" step={1} i={1}>
+          {/* Which of our units the booking came in for — first, with its photo. */}
+          <Field label="Booked for" req err={errs.property}>
+            <PropertyPicker value={f.property} options={s.props} onChange={set('property')} />
+          </Field>
           <Field label="Booking type" req>
             <ChoiceChips value={f.type} options={['Stay', 'Resold', 'Pass']}
               onChange={(v) => setF((p) => ({ ...p, type: v, channel: v === 'Pass' ? 'Pass' : p.channel === 'Pass' ? 'Airbnb' : p.channel }))} />
@@ -439,41 +475,27 @@ export default function BookingForm() {
           ) : null}
           {/* From host: which host — picked from the list, or added right here.
               Their flat (if the guest sleeps there) is chosen under Stay. */}
-          {f.channel === 'From host' && f.type !== 'Pass' ? (
-            deal && dealHost ? (
-              <View style={[st.picked, { marginTop: -4 }]}>
-                <Text style={st.pickedT}>{dealHost.name}</Text>
-                <Text style={st.pickedS}>{dealHost.phone || 'No mobile saved'}</Text>
-                <TouchableOpacity onPress={() => { setDeal(null); if (dealUnit) { set('stayUnit')(''); setPartner(false); } }} hitSlop={8} style={st.pickedX}><Text style={st.link}>Change</Text></TouchableOpacity>
-              </View>
-            ) : (
-              <FromHostPick data={hostsData} askUnit={f.type !== 'Stay'} onPick={(h) => {
-                const us = hostUnitsOf(h.id);
-                /* A Stay is in our flat — never auto-pick the host's unit for it. */
-                if (f.type !== 'Stay' && us.length === 1) pickHostUnit(us[0]);
-                else setDeal({ hostId: h.id, unitId: 0, collectedBy: defaultCollector(f.channel) });
-              }} onCreated={async (hostId, unitId, unit) => {
-                await s.reloadLogs();
-                setDeal({ hostId, unitId, collectedBy: defaultCollector(f.channel) });
-                if (unitId) { set('stayUnit')(unit); setPartner(false); }
-              }} />
-            )
-          ) : null}
-          <Field label="Booked for" req err={errs.property}>
-            <PropertyPicker compact value={f.property} options={s.props} onChange={set('property')} />
-          </Field>
+          {f.channel === 'From host' && f.type !== 'Pass' && f.type !== 'Resold' ? hostBlock : null}
           <Field label="Booking date" req err={errs.date}>
             <DateField value={f.date} onChange={set('date')} />
           </Field>
           {/* The same column means different things by booking type, so the
               label follows the type instead of staying vague. */}
+          {f.type === 'Resold' ? (
+            <Field label="Resold to" hint="The host whose flat your guest gets.">
+              {hostBlock}
+              {/* A pre-ledger "Resold to" name with no host linked yet. */}
+              {!deal && f.referrer ? <Text style={st.hitNote}>{'Saved as “' + f.referrer + '” — pick or add the host to track the money.'}</Text> : null}
+            </Field>
+          ) : (
           <Field
-            label={f.type === 'Resold' ? 'Resold to' : 'Referrer / source'}
+            label="Referrer / source"
             hint={f.type === 'Resold' ? 'Who the night went to — shown on the check-in card.' : undefined}
           >
             <TxtInput value={f.referrer} onChange={set('referrer')}
               placeholder={f.type === 'Resold' ? 'e.g. Sudhir Badhana' : 'e.g. GVL Spira · Airbnb - Harsh'} />
           </Field>
+          )}
         </FormCard>
         </View>
 
@@ -502,7 +524,7 @@ export default function BookingForm() {
                   if (stayMode === 'partner') return;
                   setPartner(true); set('stayUnit')('');
                   /* Keep a host picked under "Came from" — offer their flats first. */
-                  if (!(f.channel === 'From host' && deal)) setDeal(null);
+                  if (!(hostInBooking && deal)) setDeal(null);
                 }}>
                 <Text style={[st.unitChipTxt, stayMode === 'partner' && st.unitChipTxtOn]}>Host’s flat…</Text>
               </TouchableOpacity>
@@ -511,7 +533,7 @@ export default function BookingForm() {
               <View style={st.picked}>
                 <Text style={st.pickedT}>{'Unit ' + dealUnit.unit + (dealUnit.building ? ' · ' + dealUnit.building : '')}</Text>
                 <Text style={st.pickedS}>{'Host: ' + (dealHost?.name || '')}</Text>
-                <TouchableOpacity onPress={() => { setDeal(f.channel === 'From host' && deal ? { ...deal, unitId: 0 } : null); setPartner(true); set('stayUnit')(''); }} hitSlop={8} style={st.pickedX}><Text style={st.link}>Change</Text></TouchableOpacity>
+                <TouchableOpacity onPress={() => { setDeal(hostInBooking && deal ? { ...deal, unitId: 0 } : null); setPartner(true); set('stayUnit')(''); }} hitSlop={8} style={st.pickedX}><Text style={st.link}>Change</Text></TouchableOpacity>
               </View>
             ) : stayMode === 'partner' && dealHost && hostUnitsOf(dealHost.id).length ? (
               <View style={[st.unitChips, { marginTop: 10 }]}>
@@ -526,7 +548,7 @@ export default function BookingForm() {
             ) : null}
           </Field>
           {/* Their guest → our flat, when the booking didn't come in as "From host". */}
-          {stayMode !== 'partner' && f.channel !== 'From host' ? (
+          {stayMode !== 'partner' && !hostInBooking ? (
             deal && dealHost ? (
               <View style={st.picked}>
                 <Text style={st.pickedT}>{'Guest came from ' + dealHost.name}</Text>
@@ -735,8 +757,8 @@ function HostUnitPick({ data, typed, onPick, onType }: { data?: HostsData; typed
 }
 /* Channel "From host": search the hosts we know, or add one in place —
    name, mobile and the unit the guest gets (blank = they're in our flat). */
-function FromHostPick({ data, askUnit, onPick, onCreated }: {
-  data?: HostsData; askUnit: boolean; onPick: (h: Host) => void; onCreated: (hostId: number, unitId: number, unit: string) => void;
+function FromHostPick({ data, askUnit, resold, onPick, onCreated }: {
+  data?: HostsData; askUnit: boolean; resold?: boolean; onPick: (h: Host) => void; onCreated: (hostId: number, unitId: number, unit: string, name: string) => void;
 }) {
   const s = useStore();
   const toast = useToast();
@@ -753,7 +775,7 @@ function FromHostPick({ data, askUnit, onPick, onCreated }: {
     try {
       const r = await api.quickAddHost(s.pin, askUnit ? n : { ...n, unit: '' });
       toast(r.message, true);
-      onCreated(r.hostId, r.unitId, askUnit ? n.unit.trim() : '');
+      onCreated(r.hostId, r.unitId, askUnit ? n.unit.trim() : '', n.name.trim());
     } catch (e: any) { toast(String(e?.message || e), false); } finally { setBusy(false); }
   };
   if (adding) {
@@ -764,7 +786,7 @@ function FromHostPick({ data, askUnit, onPick, onCreated }: {
         <Field label="Host mobile"><TxtInput value={n.phone} onChange={(v) => setN({ ...n, phone: v })} placeholder="+91 …" keyboardType="phone-pad" /></Field>
         {/* A Stay is in our flat, so the host's unit isn't asked; Resold/Pass may be in theirs. */}
         {askUnit ? (
-          <Field label="Host unit number" hint="The flat your guest gets. Leave blank if the guest stays in your flat.">
+          <Field label="Host unit number" hint={resold ? 'The host’s flat your guest will stay in.' : 'The flat your guest gets. Leave blank if the guest stays in your flat.'}>
             <TxtInput value={n.unit} onChange={(v) => setN({ ...n, unit: v })} placeholder="e.g. 3103" />
           </Field>
         ) : null}
@@ -777,7 +799,7 @@ function FromHostPick({ data, askUnit, onPick, onCreated }: {
   }
   return (
     <View style={{ gap: 6, marginBottom: 10, marginTop: -4 }}>
-      <TxtInput value={q} onChange={setQ} placeholder="Which host? Search name, mobile or unit" />
+      <TxtInput value={q} onChange={setQ} placeholder={resold ? 'Search host name, mobile or unit' : 'Which host? Search name, mobile or unit'} />
       {hits.map((h) => {
         const us = units.filter((u) => u.host_id === h.id).map((u) => u.unit);
         return (
