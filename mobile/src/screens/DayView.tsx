@@ -48,8 +48,10 @@ type Blk = {
   inHere: boolean; outHere: boolean; inGuess: boolean; outGuess: boolean;
 };
 
-export default function DayView({ dayKey, stays, from, area, progress, toneOf, onClose, onOpen, onDay }: {
+export default function DayView({ dayKey, stays, from, area, progress, toneOf, onClose, onOpen, onDay, bare }: {
   dayKey: string;
+  /* Inside the calendar's own header (title, arrows, views): no header here. */
+  bare?: boolean;
   stays: Stay[];
   from: Rect;                      // the tapped cell, in this tab's coordinates
   area: { w: number; h: number };  // the tab's size
@@ -189,7 +191,7 @@ export default function DayView({ dayKey, stays, from, area, progress, toneOf, o
       </Animated.View>
 
       <Animated.View style={[{ flex: 1 }, content]}>
-        <View style={st.head}>
+        {!bare ? <View style={st.head}>
           <TouchableOpacity onPress={onClose} style={st.back} hitSlop={10} accessibilityLabel="Back to month">
             <Text style={st.backTxt}>‹</Text>
           </TouchableOpacity>
@@ -203,7 +205,7 @@ export default function DayView({ dayKey, stays, from, area, progress, toneOf, o
           <TouchableOpacity onPress={() => onDay(addDays(dayKey, 1))} style={st.nav} accessibilityLabel="Next day">
             <Text style={st.navTxt}>›</Text>
           </TouchableOpacity>
-        </View>
+        </View> : null}
 
         <View style={st.chips}>
           <Chip n={arriving.length} label="arriving" color={C.green} />
@@ -351,7 +353,7 @@ const st = StyleSheet.create({
   title: { fontFamily: F.xbold, fontSize: 24, letterSpacing: -0.6, color: C.ink },
   nav: { width: 34, height: 34, borderRadius: 17, borderWidth: 1, borderColor: C.line, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff' },
   navTxt: { fontSize: 20, lineHeight: 22, color: C.bark, fontFamily: F.bold },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, paddingHorizontal: 14, paddingBottom: 10 },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, paddingHorizontal: 14, paddingTop: 10, paddingBottom: 10 },
   chip: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: 4, paddingHorizontal: 10, borderRadius: 999, backgroundColor: '#fff', borderWidth: 1, borderColor: C.hair },
   chipDot: { width: 7, height: 7, borderRadius: 4 },
   chipTxt: { fontFamily: F.semi, fontSize: 12, color: C.ink },
