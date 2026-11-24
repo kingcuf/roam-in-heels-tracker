@@ -198,14 +198,17 @@ export default {
       /* Central sign-in + brute-force throttle. `user` is blank for the built-in
          owner account (the PIN secret), so pre-username clients still work. */
       const ip = clientIp(request);
-      const blocked = await throttleCheck(env, ip);
-      if (blocked) bad(blocked);
-      const me = await authenticate(env, p.user, pin);
+      /* Both reads at once: the throttle verdict is still applied before the
+         sign-in result is used. The clearing DELETE used to run on every
+         request — a write, on every read — and now runs only when this IP
+         actually has a failure on record. */
+      const [th, me] = await Promise.all([throttleCheck(env, ip), authenticate(env, p.user, pin)]);
+      if (th.blocked) bad(th.blocked);
       if (!me) {
         await recordFail(env, ip);
         bad('Wrong username or PIN');
       }
-      await clearFails(env, ip);
+      if (th.seen) await clearFails(env, ip);
 
       /* Rights gate, before any handler runs. Fails closed: an action in
          neither list is refused rather than silently allowed. */
@@ -561,8 +564,12 @@ async function getDashboard(env, pin, property, fromISO, toISO) {
   const fp = (property && property !== 'All') ? String(property) : null;
   const curKey = todayISO().slice(0, 7);
 
-  const bAll = (await env.DB.prepare('SELECT * FROM bookings ORDER BY id').all()).results;
-  const eAll = (await env.DB.prepare('SELECT * FROM expenses ORDER BY id').all()).results;
+  const [bQ, eQ, propsRead] = await Promise.all([
+    env.DB.prepare('SELECT * FROM bookings ORDER BY id').all(),
+    env.DB.prepare('SELECT * FROM expenses ORDER BY id').all(),
+    readProperties(env),
+  ]);
+  const bAll = bQ.results, eAll = eQ.results;
 
   const rFrom = fromISO || null;
   const rTo   = toISO   || null;
@@ -685,7 +692,7 @@ async function getDashboard(env, pin, property, fromISO, toISO) {
     kpisMonth: { totalRev: cmRev, totalExp: expMonthTotal, recurExp: expMonthRecur,
                  operExp: expMonthOper, netPnL: cmRev - expMonthTotal, bookings: cm.c },
     currentMonth: MMMyyyy(curKey),
-    properties: await readProperties(env), filter: fp || 'All',
+    properties: propsRead, filter: fp || 'All',
     generatedAt: nowStamp()
   };
 }
@@ -1170,10 +1177,12 @@ async function insertBookingSteps(env, row, steps, by) {
 /* Rides along on `logs`: every step (removed property steps included, so past
    bookings keep theirs) and every tick. */
 async function checklistData(env) {
-  const items = await env.DB.prepare(
-    `SELECT id, property, booking_row, preset, label, stage, sort, created_at, removed_at
-       FROM checklist_items ORDER BY sort, id`).all();
-  const ticks = await env.DB.prepare('SELECT booking_row, item_id, done_by, done_at FROM checklist_ticks').all();
+  const [items, ticks] = await Promise.all([
+    env.DB.prepare(
+      `SELECT id, property, booking_row, preset, label, stage, sort, created_at, removed_at
+         FROM checklist_items ORDER BY sort, id`).all(),
+    env.DB.prepare('SELECT booking_row, item_id, done_by, done_at FROM checklist_ticks').all(),
+  ]);
   return { items: items.results || [], ticks: ticks.results || [] };
 }
 
@@ -1264,18 +1273,20 @@ const MESSAGE_RECIPIENTS = new Set(['guest', 'host', 'manager', 'other']);
 const FACT_KEY_RE = /^[a-z][a-z0-9_]{0,39}$/;
 
 async function messagesData(env) {
-  const t = await env.DB.prepare(
-    `SELECT id, title, body, stage, audience, properties, preset, sort, updated_at, updated_by
-       FROM message_templates WHERE removed_at = '' ORDER BY sort, id`).all();
-  const f = await env.DB.prepare('SELECT property, key, label, value FROM property_facts ORDER BY property, rowid').all();
-  const sends = await env.DB.prepare(
-    'SELECT booking_row, template_id, recipient, sent_by, sent_at FROM message_sends ORDER BY id').all();
+  const [t, f, sends, imgs] = await Promise.all([
+    env.DB.prepare(
+      `SELECT id, title, body, stage, audience, properties, preset, sort, updated_at, updated_by
+         FROM message_templates WHERE removed_at = '' ORDER BY sort, id`).all(),
+    env.DB.prepare('SELECT property, key, label, value FROM property_facts ORDER BY property, rowid').all(),
+    env.DB.prepare(
+      'SELECT booking_row, template_id, recipient, sent_by, sent_at FROM message_sends ORDER BY id').all(),
+    messageImages(env).catch(() => ({})),
+  ]);
   const templates = (t.results || []).map((x) => {
     let props = [];
     try { props = JSON.parse(x.properties || '[]'); } catch (e) { props = []; }
     return { ...x, properties: Array.isArray(props) ? props : [] };
   });
-  const imgs = await messageImages(env).catch(() => ({}));
   for (const x of templates) x.images = imgs[x.id] || [];
   return { templates, facts: f.results || [], sends: sends.results || [] };
 }
@@ -1462,32 +1473,40 @@ async function logBlock(env, table, headers, cols) {
     }))
   };
 }
+/* Every block is independent, so they are read concurrently: this used to be
+   ~16 D1 round trips one after another, which made the app's main call the
+   sum of them instead of the slowest one. */
 async function getLogs(env, pin, origin = '') {
-  return {
-    bookings: await logBlock(env, 'bookings', BOOKING_HEADERS, BOOKING_COLS),
-    expenses: await logBlock(env, 'expenses', EXPENSE_HEADERS, EXPENSE_COLS),
-    savings:  await logBlock(env, 'savings',  SAVING_HEADERS,  SAVING_COLS),
+  const parts = {
+    bookings: logBlock(env, 'bookings', BOOKING_HEADERS, BOOKING_COLS),
+    expenses: logBlock(env, 'expenses', EXPENSE_HEADERS, EXPENSE_COLS),
+    savings:  logBlock(env, 'savings',  SAVING_HEADERS,  SAVING_COLS),
     /* Actions ride along with the other blocks rather than getting a call of
        their own: the Action tab already waits on this response to draw, and a
        second request would only delay the tab it belongs to. */
-    tasks:    await logBlock(env, 'tasks',    TASK_HEADERS,    TASK_COLS),
+    tasks:    logBlock(env, 'tasks',    TASK_HEADERS,    TASK_COLS),
     /* Website enquiries, for the same reason: the Action tab lists them. */
-    enquiries: await logBlock(env, 'enquiries', ENQUIRY_HEADERS, ENQUIRY_COLS),
+    enquiries: logBlock(env, 'enquiries', ENQUIRY_HEADERS, ENQUIRY_COLS),
     /* Which ID documents exist, folded into the same call the app already makes
        on load — otherwise the Action tab would need one request per booking. */
-    idStatus: await idStatus(env),
+    idStatus: idStatus(env),
     /* Same trip, with the attachment ids: the Action tab renders the lead
        guest's ID document as the card's avatar and would otherwise need one
        request per card to find out which object to ask for. */
-    idDocs: await idDocs(env),
+    idDocs: idDocs(env),
     /* Booking checklists: steps and ticks, for the booking page. */
-    checklist: await checklistData(env),
+    checklist: checklistData(env),
     /* Message library, unit facts and sends, for the booking page's Messages tab. */
     /* Guarded: a missing table must never take the whole logs call down. */
-    messages: await messagesData(env).catch(() => undefined),
-    photos: await photosData(env, origin).catch(() => undefined),
-    hosts: await hostsData(env).catch(() => undefined)
+    messages: messagesData(env).catch(() => undefined),
+    photos: photosData(env, origin).catch(() => undefined),
+    hosts: hostsData(env).catch(() => undefined)
   };
+  const keys = Object.keys(parts);
+  const vals = await Promise.all(keys.map((k) => parts[k]));
+  const out = {};
+  keys.forEach((k, i) => { out[k] = vals[i]; });
+  return out;
 }
 
 /* ─────────────── INVENTORY ───────────────

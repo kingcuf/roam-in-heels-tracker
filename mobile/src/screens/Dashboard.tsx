@@ -13,6 +13,7 @@ import {
   Btn, H4, Hint, KpiCard, KpiH, Panel, PanelTitle, Pill, STable, Sheet, SumLine, useToast, Cell,
 } from '../ui';
 import { SelectField, DateField } from '../fields';
+import { Shimmer, ShimmerCard } from '../ui';
 import { BankChart } from '../charts';
 import RevenueTarget from './RevenueTarget';
 
@@ -88,9 +89,15 @@ export default function Dashboard() {
 
   if (!d) {
     return (
-      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-        <Text style={{ color: C.muted }}>Loading dashboard…</Text>
-      </View>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 14, gap: 12 }} scrollEnabled={false}>
+        <Shimmer w={140} h={22} />
+        <ShimmerCard lines={4} style={{ height: 150 }} />
+        <View style={{ flexDirection: 'row', gap: 10 }}>
+          <ShimmerCard lines={3} style={{ flex: 1 }} />
+          <ShimmerCard lines={3} style={{ flex: 1 }} />
+        </View>
+        <ShimmerCard lines={5} style={{ height: 220 }} />
+      </ScrollView>
     );
   }
 

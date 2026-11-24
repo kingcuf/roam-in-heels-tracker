@@ -137,7 +137,11 @@ export async function getAttachment(env, attachmentId) {
     headers: {
       'Content-Type': row.content_type || 'application/octet-stream',
       'Content-Disposition': `inline; filename="${String(row.filename || 'id').replace(/"/g, '')}"`,
-      'Cache-Control': 'private, no-store',
+      /* An attachment id never points at different bytes (a re-upload gets a
+         new id), so the browser may keep it for a day instead of downloading
+         every guest's ID scan again on each screen. `private` keeps it out of
+         any shared cache. */
+      'Cache-Control': 'private, max-age=86400, immutable',
       'Access-Control-Allow-Origin': '*'
     }
   });

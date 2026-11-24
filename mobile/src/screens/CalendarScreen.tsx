@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { PanResponder, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { C, F, G, inr } from '../theme';
 import { useStore } from '../store';
+import { Shimmer } from '../ui';
 import { addMonth, monthTitle } from '../calendar';
 import { Stay, addDays, computeStays, keyToDate, nightsInRange, thisMonthIso, todayIso, unitNumberOf } from '../logic';
 import { unitNo } from '../propertyPicker';
@@ -315,7 +316,18 @@ export default function CalendarScreen() {
       <View style={{ flex: 1 }} ref={bodyRef} collapsable={false}
         onLayout={(e) => { const { width, height } = e.nativeEvent.layout; setBodyW(width); setArea({ w: width, h: height }); }}>
         <Animated.View style={[{ flex: 1 }, depth]} pointerEvents={view === 'day' ? 'none' : 'auto'}>
-          {view === 'schedule' ? (
+          {!b ? (
+            /* First load: the grid's shape, so the empty month never reads as "no bookings". */
+            <View style={{ padding: 14, gap: 10 }}>
+              <Shimmer w="60%" h={12} />
+              {Array.from({ length: 5 }).map((_, i) => (
+                <View key={i} style={{ flexDirection: 'row', gap: 4 }}>
+                  {Array.from({ length: 7 }).map((__, j) => <Shimmer key={j} h={64} r={8} style={{ flex: 1, width: undefined }} />)}
+                </View>
+              ))}
+              <Shimmer h={90} r={16} style={{ marginTop: 8 }} />
+            </View>
+          ) : view === 'schedule' ? (
             <ScheduleView stays={stays} tk={tk} toneOf={toneOf} phaseOf={phaseOf} colorOf={colorOf} onOpen={showStay} onDay={(k) => goDay(k)} />
           ) : view === 'week' ? (
             <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 28 }}>

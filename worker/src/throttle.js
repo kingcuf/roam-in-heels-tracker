@@ -23,21 +23,22 @@ export function clientIp(request) {
          'unknown';
 }
 
-/* Returns null when allowed, or a human-readable reason when blocked. */
+/* `blocked` is null when allowed, or a human-readable reason; `seen` says
+   this IP has a failure on record (so a good sign-in should clear it). */
 export async function throttleCheck(env, ip) {
   try {
     const row = await env.DB.prepare(
       'SELECT fails, window_start, blocked_until FROM auth_throttle WHERE ip = ?'
     ).bind(ip).first();
-    if (!row) return null;
+    if (!row) return { blocked: null, seen: false };
     const now = Date.now();
     if (row.blocked_until > now) {
       const mins = Math.ceil((row.blocked_until - now) / 60000);
-      return `Too many wrong PIN attempts. Try again in ${mins} minute${mins === 1 ? '' : 's'}.`;
+      return { blocked: `Too many wrong PIN attempts. Try again in ${mins} minute${mins === 1 ? '' : 's'}.`, seen: true };
     }
-    return null;
+    return { blocked: null, seen: true };
   } catch {
-    return null;                       // fail open — see header note
+    return { blocked: null, seen: true };   // fail open — see header note
   }
 }
 

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { BackHandler, Image, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { C, F, G, inr } from '../theme';
-import { Btn, useToast } from '../ui';
+import { Btn, Shimmer, ShimmerCard, useToast } from '../ui';
 import { Ticket, TicketKind, useStore } from '../store';
 import { api } from '../api';
 import {
@@ -529,6 +529,9 @@ export default function ActionScreen() {
   const revAsk = rev.filter((x) => x.status !== 'requested').length;
 
 
+  /* First load with nothing saved yet: the board's shape, not "All clear". */
+  if (!b) return <HomeSkeleton />;
+
   return (
     <View style={{ flex: 1 }}>
       <ScrollView ref={scroller} style={{ flex: 1 }} contentContainerStyle={{ padding: 14, paddingBottom: 96 }}>
@@ -638,6 +641,30 @@ export default function ActionScreen() {
 }
 
 /* ── home pieces ────────────────────────────────────────────────────────── */
+function HomeSkeleton() {
+  const tile = (k: string) => (
+    <ShimmerCard key={k} style={st.tile}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}><Shimmer w={30} h={30} r={10} /><Shimmer w={70} h={13} /></View>
+      <Shimmer w={36} h={28} style={{ marginTop: 4 }} />
+      <Shimmer w="80%" h={11} />
+      <Shimmer w="55%" h={11} />
+    </ShimmerCard>
+  );
+  return (
+    <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 14, paddingBottom: 96 }} scrollEnabled={false}>
+      <View style={[st.propRow, { flexDirection: 'row' }]}>
+        {[110, 104, 104].map((w, i) => <Shimmer key={i} w={w} h={48} r={24} />)}
+      </View>
+      <Shimmer w={90} h={18} style={{ marginTop: 4, marginBottom: 12 }} />
+      <View style={st.grid}>{['a', 'b', 'c', 'd'].map(tile)}</View>
+      <Shimmer w={80} h={18} style={{ marginTop: 24, marginBottom: 12 }} />
+      <ShimmerCard lines={3} />
+      <Shimmer w={80} h={18} style={{ marginTop: 24, marginBottom: 12 }} />
+      <View style={st.grid}>{['e', 'f'].map(tile)}</View>
+    </ScrollView>
+  );
+}
+
 /* The unit switcher: a small photo banner per flat, saying whether it is
    booked tonight, so the filter row doubles as an at-a-glance status strip. */
 function UnitBanner({ name, on, onPress, status, busy }: { name: string; on: boolean; onPress: () => void; status: string; busy: boolean }) {

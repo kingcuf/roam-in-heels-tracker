@@ -45,10 +45,12 @@ async function rowidOf(env, name) {
 
 /* For getLogs: [{ property, album, photos: [{id, type, name}] }] for every unit. */
 export async function photosData(env, origin) {
-  const props = await env.DB.prepare('SELECT rowid AS rid, name FROM properties ORDER BY sort, rowid').all();
-  const { results } = await env.DB.prepare(
-    `SELECT id, entity_id, filename, content_type FROM attachments
-      WHERE entity_type = 'property' AND kind = 'property_photo' ORDER BY id`).all();
+  const [props, { results }] = await Promise.all([
+    env.DB.prepare('SELECT rowid AS rid, name FROM properties ORDER BY sort, rowid').all(),
+    env.DB.prepare(
+      `SELECT id, entity_id, filename, content_type FROM attachments
+        WHERE entity_type = 'property' AND kind = 'property_photo' ORDER BY id`).all(),
+  ]);
   const by = {};
   for (const r of results || []) (by[r.entity_id] = by[r.entity_id] || []).push({ id: r.id, type: r.content_type, name: r.filename });
   const out = [];

@@ -68,6 +68,31 @@ export const authStore = Platform.OS === 'web'
       deleteItemAsync: async (k: string) => { try { globalThis.localStorage?.removeItem(k); } catch {} },
     }
   : SecureStore;
+/* Last-seen data, kept on this browser so a return visit paints at once and
+   refreshes in the background (stale-while-revalidate). Web only: phones keep
+   credentials in SecureStore, which is sized for secrets, not datasets.
+   Keyed by user and wiped on sign-out, like the saved credentials. */
+const SNAP_PREFIX = 'spira_snap_v1:';
+type Snap = { at: number; me: any; rights: string[]; needsApproval: boolean; logs: any; inv: any; tickets: any; dash: any; props: any[] };
+const snapKey = (user: string) => SNAP_PREFIX + (String(user || '').trim().toLowerCase() || 'owner');
+function readSnap(user: string): Snap | null {
+  if (Platform.OS !== 'web') return null;
+  try { const t = globalThis.localStorage?.getItem(snapKey(user)); return t ? JSON.parse(t) : null; } catch { return null; }
+}
+function writeSnap(user: string, v: Snap) {
+  if (Platform.OS !== 'web') return;
+  try { globalThis.localStorage?.setItem(snapKey(user), JSON.stringify(v)); }
+  catch { try { globalThis.localStorage?.removeItem(snapKey(user)); } catch {} }   // over quota: drop it rather than keep a stale one
+}
+function clearSnaps() {
+  if (Platform.OS !== 'web') return;
+  try {
+    const ls = globalThis.localStorage; if (!ls) return;
+    const ks: string[] = [];
+    for (let i = 0; i < ls.length; i++) { const k = ls.key(i); if (k && k.startsWith(SNAP_PREFIX)) ks.push(k); }
+    ks.forEach((k) => ls.removeItem(k));
+  } catch {}
+}
 const LOGS_STALE_MS = 15000; // E4: skip reload if logs fetched < 15 s ago
 const TICKETS_STALE_MS = 15000; // same window for the Team tab's ticket list
 
@@ -306,6 +331,30 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setEditS((e) => (e ? ((r) => (r ? { ...e, cells: r.cells } : null))(find(l?.savings, e.row)) : e));
   };
 
+  /* Keep the snapshot current, a beat after things settle. */
+  const userRef = useRef('');
+  useEffect(() => {
+    if (!loggedIn || !logs || !me) return;
+    const t = setTimeout(() => writeSnap(userRef.current, {
+      at: Date.now(), me, rights, needsApproval, logs: { ...logs, idStatus: idMap || (logs as any).idStatus, idDocs: idDocs || (logs as any).idDocs },
+      inv, tickets, dash, props,
+    }), 800);
+    return () => clearTimeout(t);
+  }, [loggedIn, logs, inv, tickets, dash, props, me, rights, needsApproval, idMap, idDocs]);
+  const applySnap = (sn: Snap) => {
+    rightsRef.current = sn.rights || []; setRights(sn.rights || []);
+    setMe(sn.me || null); setNeedsApproval(!!sn.needsApproval);
+    if (sn.logs) {
+      setLogs(sn.logs);
+      if (sn.logs.idStatus) setIdMap(sn.logs.idStatus);
+      if (sn.logs.idDocs) setIdDocs(sn.logs.idDocs);
+    }
+    if (sn.inv) setInv(sn.inv);
+    if (sn.tickets) setTickets(sn.tickets);
+    if (sn.dash) setDash(sn.dash);
+    if (Array.isArray(sn.props)) setProps(sn.props);
+  };
+
   const inc = () => setBusyN((n) => n + 1);
   const dec = () => setBusyN((n) => Math.max(0, n - 1));
 
@@ -429,6 +478,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const doLogin: StoreT['doLogin'] = async (user, p, opts) => {
     setApiUser(user.trim());
+    userRef.current = user.trim();
     let r: any;
     try { r = await api.login(p); }
     catch (e) { setApiUser(''); throw e; }
@@ -458,6 +508,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setTab('action'); setAddSeg('book'); setLogSeg('blog');
     authStore.deleteItemAsync(AUTH_KEY).catch(() => {});
     authStore.deleteItemAsync(PIN_KEY).catch(() => {});
+    clearSnaps();
   };
 
   /* The Add tab can land on a segment this role cannot use (the default is
@@ -472,7 +523,31 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         const saved = await authStore.getItemAsync(AUTH_KEY);
         if (saved) {
           const a = JSON.parse(saved);
-          try { await doLogin(a.user || '', a.pin || ''); } catch {}
+          /* Paint the last-seen data straight away, then sign in and refresh
+             behind it. A wrong PIN (changed elsewhere) still signs out; no
+             network keeps the saved data on screen, said as such. */
+          const sn = readSnap(a.user || '');
+          if (sn && sn.logs) {
+            setApiUser(String(a.user || '').trim()); userRef.current = String(a.user || '').trim();
+            pinRef.current = a.pin || ''; setPin(a.pin || '');
+            applySnap(sn);
+            const rs = sn.rights || [];
+            const first = (['action', 'cal', 'dash'] as Tab[]).find((t) => rs.indexOf(TAB_RIGHT[t]!) >= 0);
+            setTab(first || 'team');
+            setLoggedIn(true);
+            setBooting(false);
+          }
+          try { await doLogin(a.user || '', a.pin || '', sn && sn.logs ? { keepTab: true } : undefined); }
+          catch (e: any) {
+            if (sn && sn.logs) {
+              const msg = String(e?.message || '');
+              if (/wrong username or pin/i.test(msg)) logout();
+              else {
+                const mins = Math.max(1, Math.round((Date.now() - sn.at) / 60000));
+                toast('Offline — showing data from ' + (mins < 60 ? mins + ' min' : Math.round(mins / 60) + ' h') + ' ago', false);
+              }
+            }
+          }
         } else {
           const legacy = await authStore.getItemAsync(PIN_KEY);   // owner PIN from before usernames
           if (legacy) { try { await doLogin('', legacy); } catch {} }

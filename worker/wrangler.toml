@@ -36,3 +36,8 @@ bucket_name = "spira-files"
 # One-way mirror back into the Google Sheet, 06:00 IST daily (00:30 UTC).
 [triggers]
 crons = ["30 0 * * *"]
+
+# Run the Worker next to the D1 database instead of next to the user: a
+# request makes several queries, so being close to the data wins.
+[placement]
+mode = "smart"

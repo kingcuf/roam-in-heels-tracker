@@ -590,3 +590,40 @@ const st = StyleSheet.create({
   segLblActive: { color: C.ink, fontFamily: F.bold },
   segDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.amber, marginLeft: 5 },
 });
+
+/* ── Shimmer: placeholder blocks while the first data arrives ──
+   One shared pulse drives every block on screen, so a skeleton breathes as
+   one surface instead of flickering piece by piece. Shown only when there is
+   nothing yet to show — never over data that is already on screen. */
+const shimmerPulse = new Animated.Value(0);
+let shimmerUsers = 0;
+let shimmerLoop: Animated.CompositeAnimation | null = null;
+function useShimmer() {
+  useEffect(() => {
+    shimmerUsers++;
+    if (!shimmerLoop) {
+      shimmerLoop = Animated.loop(Animated.sequence([
+        Animated.timing(shimmerPulse, { toValue: 1, duration: 750, useNativeDriver: Platform.OS !== 'web' }),
+        Animated.timing(shimmerPulse, { toValue: 0, duration: 750, useNativeDriver: Platform.OS !== 'web' }),
+      ]));
+      shimmerLoop.start();
+    }
+    return () => {
+      shimmerUsers--;
+      if (!shimmerUsers && shimmerLoop) { shimmerLoop.stop(); shimmerLoop = null; }
+    };
+  }, []);
+  return shimmerPulse.interpolate({ inputRange: [0, 1], outputRange: [0.45, 0.9] });
+}
+export function Shimmer({ w = '100%', h = 14, r = 8, style }: { w?: number | string; h?: number; r?: number; style?: any }) {
+  const opacity = useShimmer();
+  return <Animated.View style={[{ width: w as any, height: h, borderRadius: r, backgroundColor: '#E9E4DA', opacity }, style]} />;
+}
+/* A white card holding shimmer lines, the usual skeleton unit. */
+export function ShimmerCard({ lines = 3, h, style, children }: { lines?: number; h?: number; style?: any; children?: React.ReactNode }) {
+  return (
+    <View style={[{ backgroundColor: '#fff', borderRadius: 18, borderWidth: 1, borderColor: 'rgba(90,58,20,0.08)', padding: 14, gap: 10 }, h ? { height: h } : null, style]}>
+      {children || Array.from({ length: lines }).map((_, i) => <Shimmer key={i} w={i === 0 ? '45%' : i === lines - 1 ? '60%' : '85%'} h={i === 0 ? 16 : 12} />)}
+    </View>
+  );
+}
