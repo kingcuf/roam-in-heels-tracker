@@ -447,9 +447,10 @@ export default function BookingForm() {
                 <TouchableOpacity onPress={() => { setDeal(null); if (dealUnit) { set('stayUnit')(''); setPartner(false); } }} hitSlop={8} style={st.pickedX}><Text style={st.link}>Change</Text></TouchableOpacity>
               </View>
             ) : (
-              <FromHostPick data={hostsData} onPick={(h) => {
+              <FromHostPick data={hostsData} askUnit={f.type !== 'Stay'} onPick={(h) => {
                 const us = hostUnitsOf(h.id);
-                if (us.length === 1) pickHostUnit(us[0]);
+                /* A Stay is in our flat — never auto-pick the host's unit for it. */
+                if (f.type !== 'Stay' && us.length === 1) pickHostUnit(us[0]);
                 else setDeal({ hostId: h.id, unitId: 0, collectedBy: defaultCollector(f.channel) });
               }} onCreated={async (hostId, unitId, unit) => {
                 await s.reloadLogs();
@@ -734,8 +735,8 @@ function HostUnitPick({ data, typed, onPick, onType }: { data?: HostsData; typed
 }
 /* Channel "From host": search the hosts we know, or add one in place —
    name, mobile and the unit the guest gets (blank = they're in our flat). */
-function FromHostPick({ data, onPick, onCreated }: {
-  data?: HostsData; onPick: (h: Host) => void; onCreated: (hostId: number, unitId: number, unit: string) => void;
+function FromHostPick({ data, askUnit, onPick, onCreated }: {
+  data?: HostsData; askUnit: boolean; onPick: (h: Host) => void; onCreated: (hostId: number, unitId: number, unit: string) => void;
 }) {
   const s = useStore();
   const toast = useToast();
@@ -750,9 +751,9 @@ function FromHostPick({ data, onPick, onCreated }: {
     if (!n.name.trim()) { toast('Enter the host’s name', false); return; }
     setBusy(true);
     try {
-      const r = await api.quickAddHost(s.pin, n);
+      const r = await api.quickAddHost(s.pin, askUnit ? n : { ...n, unit: '' });
       toast(r.message, true);
-      onCreated(r.hostId, r.unitId, n.unit.trim());
+      onCreated(r.hostId, r.unitId, askUnit ? n.unit.trim() : '');
     } catch (e: any) { toast(String(e?.message || e), false); } finally { setBusy(false); }
   };
   if (adding) {
@@ -761,9 +762,12 @@ function FromHostPick({ data, onPick, onCreated }: {
         <Text style={st.newHostT}>New host</Text>
         <Field label="Host name" req><TxtInput value={n.name} onChange={(v) => setN({ ...n, name: v })} placeholder="e.g. Chandra Prakash" autoFocus /></Field>
         <Field label="Host mobile"><TxtInput value={n.phone} onChange={(v) => setN({ ...n, phone: v })} placeholder="+91 …" keyboardType="phone-pad" /></Field>
-        <Field label="Host unit number" hint="The flat your guest gets. Leave blank if the guest stays in your flat.">
-          <TxtInput value={n.unit} onChange={(v) => setN({ ...n, unit: v })} placeholder="e.g. 3103" />
-        </Field>
+        {/* A Stay is in our flat, so the host's unit isn't asked; Resold/Pass may be in theirs. */}
+        {askUnit ? (
+          <Field label="Host unit number" hint="The flat your guest gets. Leave blank if the guest stays in your flat.">
+            <TxtInput value={n.unit} onChange={(v) => setN({ ...n, unit: v })} placeholder="e.g. 3103" />
+          </Field>
+        ) : null}
         <View style={{ flexDirection: 'row', gap: 14, alignItems: 'center' }}>
           <TouchableOpacity onPress={save} disabled={busy} style={st.newHostBtn}><Text style={st.newHostBtnT}>{busy ? 'Adding…' : 'Add host'}</Text></TouchableOpacity>
           <TouchableOpacity onPress={() => setAdding(false)} hitSlop={8}><Text style={[st.link, { color: C.bark }]}>Cancel</Text></TouchableOpacity>
