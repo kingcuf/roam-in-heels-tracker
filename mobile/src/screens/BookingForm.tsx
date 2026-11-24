@@ -234,7 +234,11 @@ export default function BookingForm() {
       coGuestBirthYr: nGuests >= 2 ? f.coGuestBirthYr : '',
       extraGuests: extras.slice(0, Math.max(0, nGuests - 2)),
       repeat: f.repeat === 'Yes' ? '1' : '',
-      hostDeal: deal ? { hostId: deal.hostId, unitId: deal.unitId, collectedBy: deal.collectedBy, hostShare: hostShare.trim() === '' ? null : hostShare } : hadDeal ? null : undefined,
+      hostDeal: deal
+        ? (f.type === 'Pass'
+          ? { hostId: deal.hostId, unitId: 0, collectedBy: 'host' as const, hostShare: null }
+          : { hostId: deal.hostId, unitId: deal.unitId, collectedBy: deal.collectedBy, hostShare: hostShare.trim() === '' ? null : hostShare })
+        : hadDeal ? null : undefined,
       /* Stored commission stays "everything deducted": platform/other + host's share. */
       commission: deal && hostShare.trim() !== '' && isMoneyText(hostShare)
         ? String(Math.round(((isMoneyText(f.commission) && f.commission !== '' ? moneyNum(f.commission) : 0) + moneyNum(hostShare)) * 100) / 100)
@@ -408,21 +412,22 @@ export default function BookingForm() {
                 <TouchableOpacity onPress={() => { setDeal(null); if (toHost) set('referrer')(''); if (dealUnit) { set('stayUnit')(''); setPartner(false); } }} hitSlop={8} style={st.pickedX}><Text style={st.link}>Change</Text></TouchableOpacity>
               </View>
             ) : (
-              <FromHostPick data={hostsData} askUnit={f.type !== 'Stay'} resold={toHost} onPick={(h) => {
+              <FromHostPick data={hostsData} askUnit={f.type === 'Resold'} resold={toHost} onPick={(h) => {
                 const us = hostUnitsOf(h.id);
                 if (toHost) set('referrer')(h.name);
                 /* A Stay is in our flat — never auto-pick the host's unit for it. */
-                if (f.type !== 'Stay' && us.length === 1) pickHostUnit(us[0]);
+                if (f.type === 'Resold' && us.length === 1) pickHostUnit(us[0]);
                 else {
                   setDeal({ hostId: h.id, unitId: 0, collectedBy: defaultCollector(f.channel) });
                   /* Resold: the guest sleeps in one of their flats — open that choice under Stay. */
-                  if (toHost && us.length) { setPartner(true); set('stayUnit')(''); }
+                  if (f.type === 'Resold' && us.length) { setPartner(true); set('stayUnit')(''); }
                 }
               }} onCreated={async (hostId, unitId, unit, name) => {
                 await s.reloadLogs();
                 if (toHost) set('referrer')(name);
-                setDeal({ hostId, unitId, collectedBy: defaultCollector(f.channel) });
-                if (unitId) { set('stayUnit')(unit); setPartner(false); }
+                const pass = f.type === 'Pass';
+                setDeal({ hostId, unitId: pass ? 0 : unitId, collectedBy: pass ? 'host' : defaultCollector(f.channel) });
+                if (unitId && !pass) { set('stayUnit')(unit); setPartner(false); }
               }} />
             )
   );
@@ -553,7 +558,14 @@ export default function BookingForm() {
           </Field>
           <Field label="Booking type" req>
             <ChoiceChips value={f.type} options={['Stay', 'Resold', 'Pass']}
-              onChange={(v) => setF((p) => ({ ...p, type: v, channel: v === 'Pass' ? 'Pass' : p.channel === 'Pass' ? 'Airbnb' : p.channel }))} />
+              onChange={(v) => {
+                setF((p) => ({ ...p, type: v, channel: v === 'Pass' ? 'Pass' : p.channel === 'Pass' ? 'Airbnb' : p.channel,
+                  ...(v === 'Pass' ? { stayUnit: '', guestPaid: '', commission: '', pending: '' } : {}) }));
+                if (v === 'Pass') {
+                  setPartner(false); setHostShare('');
+                  if (deal) setDeal({ ...deal, unitId: 0, collectedBy: 'host' });
+                }
+              }} />
           </Field>
           {f.type !== 'Pass' ? (
             <Field label="Came from">
@@ -596,6 +608,9 @@ export default function BookingForm() {
 
         {/* 2 · The stay: where the guest actually sleeps, and when. */}
         <FormCard title="Stay" step={2} i={2}>
+          {/* A Pass hands the guest to a host; where they sleep is the host's
+              business, so only the dates are asked. */}
+          {f.type !== 'Pass' ? (<>
           <Field label="Guest stays in">
             <View style={st.unitChips}>
               <TouchableOpacity accessibilityRole="radio" accessibilityState={{ selected: stayMode === 'same' }}
@@ -658,6 +673,7 @@ export default function BookingForm() {
               </TouchableOpacity>
             )
           ) : null}
+          </>) : null}
           <Two>
             <View style={{ flex: 1 }}>
               <Field label="Check-in date"><DateField value={f.checkinDate} onChange={set('checkinDate')} allowClear /></Field>
@@ -799,6 +815,22 @@ export default function BookingForm() {
 
         <View onLayout={onCard('money')}>
         <FormCard title="Money" step={4} i={4}>
+          {f.type === 'Pass' ? (
+            /* A Pass is one number: what the host pays us for the guest. That
+               is our net, and it is what the host owes on their ledger. */
+            <>
+              <Field label="Host paid for the pass (₹)" req err={errs.net}
+                hint={dealHost ? 'What ' + dealHost.name.split(' ')[0] + ' pays you — your net earning.' : 'What the host pays you — your net earning.'}>
+                <TxtInput value={f.net} onChange={set('net')} money onFocus={() => revealCard('money')} />
+              </Field>
+              {isMoneyText(f.net) && f.net !== '' ? (
+                <View style={st.moneySum}>
+                  <Text style={st.moneySumT}>{'You earn ' + inr(moneyNum(f.net))}</Text>
+                  {dealHost ? <Text style={st.moneySumS}>{'Added to ' + dealHost.name.split(' ')[0] + '’s ledger as owed to you'}</Text> : null}
+                </View>
+              ) : null}
+            </>
+          ) : (<>
           {deal && dealHost ? (
             <Field label="Who collected the guest’s money?">
               <ChoiceChips value={deal.collectedBy === 'host' ? dealHost.name.split(' ')[0] : 'We did'}
@@ -867,6 +899,7 @@ export default function BookingForm() {
               ) : null}
             </View>
           ) : null}
+          </>)}
         </FormCard>
         </View>
 

@@ -1198,6 +1198,8 @@ export function computeStays(block: LogBlock | null, filter: string): StayData {
     block.rows.forEach((o) => {
       const c = o.cells;
       if (!c || !c[18]) return;
+      /* A Pass guest sleeps in the host's flat, not ours: no night of ours. */
+      if (String(c[3]) === 'Pass') return;
       /* Nights belong to the flat the guest slept in — see inStayScope. The
          money carried along for the detail sheet is still this view's share. */
       if (!inStayScope(c, filter)) return;
@@ -1742,8 +1744,9 @@ export function hostLedger(hostId: number, data: HostsData | undefined, rows: { 
     raw.push({
       kind: 'deal', date, amount: amt, row: o.r, deal: d, settled: !!d.settled,
       /* Pre-ledger history often has no unit recorded: say nothing rather than "in our flat". */
-      label: String(c[2] || 'Guest').trim() + (u ? ' · in their ' + u.unit : d.settled ? '' : ' · in our ' + (unitNumberOf(String(c[1] || '')) || c[1])),
+      label: String(c[2] || 'Guest').trim() + (c[3] === 'Pass' ? ' · passed to them' : u ? ' · in their ' + u.unit : d.settled ? '' : ' · in our ' + (unitNumberOf(String(c[1] || '')) || c[1])),
       sub: d.settled ? 'Before the ledger · settled'
+        : c[3] === 'Pass' ? 'Pass · they pay us ' + inrPlain(amt)
         : d.collected_by === 'us' ? 'We collected · their share ' + inrPlain(Math.abs(amt))
         : 'They collected · our net ' + inrPlain(amt),
     });
