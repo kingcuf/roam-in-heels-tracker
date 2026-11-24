@@ -148,3 +148,31 @@ export async function removeHostPayment(env, me, d) {
   if (!r.meta.changes) fail('Payment not found');
   return { ok: true, message: 'Payment removed' };
 }
+
+/* From the booking form ("Channel: From host → + New host"): anyone who can
+   write bookings may create a host with one unit. Reuses an existing host of
+   the same name (and unit) instead of duplicating. Editing stays Admin. */
+export async function quickAddHost(env, me, d) {
+  if (!(me.isAdmin || me.can('booking.add') || me.can('booking.update'))) fail('Your role cannot add hosts');
+  const name = clip(d.name, 80);
+  if (!name) fail('Enter the host’s name');
+  const phone = clip(d.phone, 30);
+  const unit = clip(d.unit, 40);
+  let host = await env.DB.prepare(`SELECT id, phone FROM hosts WHERE name = ? COLLATE NOCASE AND removed_at = ''`).bind(name).first();
+  let hostId;
+  if (host) {
+    hostId = host.id;
+    if (phone && !host.phone) await env.DB.prepare(`UPDATE hosts SET phone = ?, updated_at = ?, updated_by = ? WHERE id = ?`).bind(phone, now(), me.username, hostId).run();
+  } else {
+    const r = await env.DB.prepare(`INSERT INTO hosts (name, phone, notes, created_at, created_by, updated_at, updated_by) VALUES (?, ?, '', ?, ?, ?, ?)`)
+      .bind(name, phone, now(), me.username, now(), me.username).run();
+    hostId = r.meta.last_row_id;
+  }
+  let unitId = 0;
+  if (unit) {
+    const u = await env.DB.prepare(`SELECT id FROM host_units WHERE host_id = ? AND unit = ? COLLATE NOCASE AND removed_at = ''`).bind(hostId, unit).first();
+    if (u) unitId = u.id;
+    else unitId = (await env.DB.prepare(`INSERT INTO host_units (host_id, unit) VALUES (?, ?)`).bind(hostId, unit).run()).meta.last_row_id;
+  }
+  return { ok: true, message: host ? name + ' was already a host — linked' : 'Host ' + name + ' added', hostId, unitId };
+}

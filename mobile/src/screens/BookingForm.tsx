@@ -15,7 +15,10 @@ import { FormCard, FormFooter, FormHeader, FormScroll } from '../formkit';
 import { ChoiceChips, PropertyPicker } from '../propertyPicker';
 import TicketBanner, { NoAdd, writeLabels } from './TicketBanner';
 
-const CHANNELS = ['Airbnb', 'Booking.com', 'MMT', 'Agoda', 'Offline', 'Direct/Referral', 'Pass'];
+/* 'Offline' became 'From host' (24-Nov-2026) and 'Pass' left the list — a Pass
+   booking still stores channel 'Pass', set by its type. Older values show as an
+   extra chip when editing, so a save never rewrites them silently. */
+const CHANNELS = ['Airbnb', 'Booking.com', 'MMT', 'Agoda', 'From host', 'Direct/Referral'];
 
 /* Field names as the person reads them, for "Still needed: …". */
 const LABEL: Record<string, string> = { property: 'Property', date: 'Booking date', net: 'Net earned' };
@@ -336,6 +339,7 @@ export default function BookingForm() {
     if (deal.collectedBy === 'host') return isMoneyText(f.net) && f.net !== '' ? first + ' will owe you ' + inr(moneyNum(f.net)) + ' (your net)' : first + ' will owe you your net — fill in Net earned';
     return isMoneyText(f.commission) && f.commission !== '' ? 'You’ll owe ' + first + ' ' + inr(Math.abs(moneyNum(f.commission))) + ' (their share)' : 'You’ll owe ' + first + ' their share — fill in the Money card';
   })();
+  const hostUnitsOf = (id: number) => (hostsData?.units || []).filter((u) => u.host_id === id);
   const pickHostUnit = (u: HostUnit) => {
     setDeal({ hostId: u.host_id, unitId: u.id, collectedBy: deal?.collectedBy || defaultCollector(f.channel) });
     set('stayUnit')(u.unit); setPartner(false);
@@ -453,7 +457,7 @@ export default function BookingForm() {
             ) : null}
           </Field>
           {/* Their guest → our flat: the host is the link, the unit is ours. */}
-          {stayMode !== 'partner' ? (
+          {stayMode !== 'partner' && f.channel !== 'From host' ? (
             deal && dealHost ? (
               <View style={st.picked}>
                 <Text style={st.pickedT}>{'Guest came from ' + dealHost.name}</Text>
@@ -484,9 +488,51 @@ export default function BookingForm() {
             <ChoiceChips value={f.type} options={['Stay', 'Resold', 'Pass']}
               onChange={(v) => setF((p) => ({ ...p, type: v, channel: v === 'Pass' ? 'Pass' : p.channel }))} />
           </Field>
-          <Field label="Channel">
-            <ChoiceChips value={f.channel} options={CHANNELS} onChange={set('channel')} />
-          </Field>
+          {f.type !== 'Pass' ? (
+            <Field label="Channel">
+              <ChoiceChips value={f.channel} options={f.channel && CHANNELS.indexOf(f.channel) < 0 ? [...CHANNELS, f.channel] : CHANNELS}
+                onChange={(v) => {
+                  set('channel')(v);
+                  if (deal) setDeal({ ...deal, collectedBy: defaultCollector(v) });
+                }} />
+            </Field>
+          ) : null}
+          {/* From host: which host — picked from the list, or added right here. */}
+          {f.channel === 'From host' && f.type !== 'Pass' ? (
+            deal && dealHost ? (
+              <View style={[st.picked, { marginTop: -4 }]}>
+                <Text style={st.pickedT}>{dealHost.name + (dealUnit ? ' · Unit ' + dealUnit.unit : '')}</Text>
+                <Text style={st.pickedS}>{(dealHost.phone ? dealHost.phone + ' · ' : '') + (dealUnit ? 'guest stays in their flat' : 'their guest, in our flat')}</Text>
+                <TouchableOpacity onPress={() => { setDeal(null); if (dealUnit) { set('stayUnit')(''); setPartner(false); } }} hitSlop={8} style={st.pickedX}><Text style={st.link}>Change</Text></TouchableOpacity>
+                {hostUnitsOf(dealHost.id).length ? (
+                  <View style={[st.unitChips, { marginTop: 10 }]}>
+                    {hostUnitsOf(dealHost.id).map((u) => {
+                      const on = dealUnit?.id === u.id;
+                      return (
+                        <TouchableOpacity key={u.id} style={[st.unitChip, on && st.unitChipOn]} onPress={() => pickHostUnit(u)}>
+                          <Text style={[st.unitChipTxt, on && st.unitChipTxtOn]}>{'Unit ' + u.unit}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                    <TouchableOpacity style={[st.unitChip, !dealUnit && st.unitChipOn]}
+                      onPress={() => { setDeal({ ...deal, unitId: 0 }); if (dealUnit) { set('stayUnit')(''); setPartner(false); } }}>
+                      <Text style={[st.unitChipTxt, !dealUnit && st.unitChipTxtOn]}>Our flat</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
+              </View>
+            ) : (
+              <FromHostPick data={hostsData} onPick={(h) => {
+                const us = hostUnitsOf(h.id);
+                if (us.length === 1) pickHostUnit(us[0]);
+                else setDeal({ hostId: h.id, unitId: 0, collectedBy: defaultCollector(f.channel) });
+              }} onCreated={async (hostId, unitId, unit) => {
+                await s.reloadLogs();
+                setDeal({ hostId, unitId, collectedBy: defaultCollector(f.channel) });
+                if (unitId) { set('stayUnit')(unit); setPartner(false); }
+              }} />
+            )
+          ) : null}
           <Field label="Booking date" req err={errs.date}>
             <DateField value={f.date} onChange={set('date')} />
           </Field>
@@ -686,6 +732,63 @@ function HostUnitPick({ data, typed, onPick, onType }: { data?: HostsData; typed
     </View>
   );
 }
+/* Channel "From host": search the hosts we know, or add one in place —
+   name, mobile and the unit the guest gets (blank = they're in our flat). */
+function FromHostPick({ data, onPick, onCreated }: {
+  data?: HostsData; onPick: (h: Host) => void; onCreated: (hostId: number, unitId: number, unit: string) => void;
+}) {
+  const s = useStore();
+  const toast = useToast();
+  const [q, setQ] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [n, setN] = useState({ name: '', phone: '', unit: '' });
+  const [busy, setBusy] = useState(false);
+  const t = q.trim().toLowerCase();
+  const units = data?.units || [];
+  const hits = (data?.hosts || []).filter((h) => !t || (h.name + ' ' + h.phone + ' ' + units.filter((u) => u.host_id === h.id).map((u) => u.unit).join(' ')).toLowerCase().includes(t)).slice(0, 6);
+  const save = async () => {
+    if (!n.name.trim()) { toast('Enter the host’s name', false); return; }
+    setBusy(true);
+    try {
+      const r = await api.quickAddHost(s.pin, n);
+      toast(r.message, true);
+      onCreated(r.hostId, r.unitId, n.unit.trim());
+    } catch (e: any) { toast(String(e?.message || e), false); } finally { setBusy(false); }
+  };
+  if (adding) {
+    return (
+      <View style={st.newHost}>
+        <Text style={st.newHostT}>New host</Text>
+        <Field label="Host name" req><TxtInput value={n.name} onChange={(v) => setN({ ...n, name: v })} placeholder="e.g. Chandra Prakash" autoFocus /></Field>
+        <Field label="Host mobile"><TxtInput value={n.phone} onChange={(v) => setN({ ...n, phone: v })} placeholder="+91 …" keyboardType="phone-pad" /></Field>
+        <Field label="Host unit number" hint="The flat your guest gets. Leave blank if the guest stays in your flat.">
+          <TxtInput value={n.unit} onChange={(v) => setN({ ...n, unit: v })} placeholder="e.g. 3103" />
+        </Field>
+        <View style={{ flexDirection: 'row', gap: 14, alignItems: 'center' }}>
+          <TouchableOpacity onPress={save} disabled={busy} style={st.newHostBtn}><Text style={st.newHostBtnT}>{busy ? 'Adding…' : 'Add host'}</Text></TouchableOpacity>
+          <TouchableOpacity onPress={() => setAdding(false)} hitSlop={8}><Text style={[st.link, { color: C.bark }]}>Cancel</Text></TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+  return (
+    <View style={{ gap: 6, marginBottom: 10, marginTop: -4 }}>
+      <TxtInput value={q} onChange={setQ} placeholder="Which host? Search name, mobile or unit" />
+      {hits.map((h) => {
+        const us = units.filter((u) => u.host_id === h.id).map((u) => u.unit);
+        return (
+          <TouchableOpacity key={h.id} style={st.hit} onPress={() => onPick(h)} activeOpacity={0.7}>
+            <Text style={st.hitT}>{h.name}</Text>
+            <Text style={st.hitS} numberOfLines={1}>{[h.phone, us.length ? 'Units ' + us.join(', ') : ''].filter(Boolean).join(' · ')}</Text>
+          </TouchableOpacity>
+        );
+      })}
+      <TouchableOpacity onPress={() => { setAdding(true); setN({ name: q.trim() && !hits.length ? q.trim() : '', phone: '', unit: '' }); }} hitSlop={6} style={{ alignSelf: 'flex-start', marginTop: 2 }}>
+        <Text style={st.link}>{'+ New host' + (q.trim() && !hits.length ? ' “' + q.trim() + '”' : '')}</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
 function HostPick({ data, onPick, onCancel }: { data?: HostsData; onPick: (h: Host) => void; onCancel: () => void }) {
   const [q, setQ] = useState('');
   const t = q.trim().toLowerCase();
@@ -721,6 +824,10 @@ const st = StyleSheet.create({
   hitT: { fontFamily: F.bold, fontSize: 14, color: C.ink },
   hitS: { fontFamily: F.med, fontSize: 12, color: C.bark, flex: 1 },
   hitNote: { fontFamily: F.med, fontSize: 11.5, color: C.muted, lineHeight: 16 },
+  newHost: { marginTop: -4, marginBottom: 10, padding: 12, borderRadius: 14, backgroundColor: C.warm2, borderWidth: 1, borderColor: C.hair },
+  newHostT: { fontFamily: F.xbold, fontSize: 14, color: C.ink, marginBottom: 8 },
+  newHostBtn: { backgroundColor: C.navy, borderRadius: 999, paddingVertical: 9, paddingHorizontal: 18 },
+  newHostBtnT: { fontFamily: F.bold, fontSize: 13.5, color: '#fff' },
   dealLine: { fontFamily: F.semi, fontSize: 12.5, color: C.blue2, marginTop: 8 },
   unitChip: {
     borderWidth: 1, borderColor: C.line, borderRadius: 20,

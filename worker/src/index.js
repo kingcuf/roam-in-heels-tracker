@@ -19,7 +19,7 @@
  */
 
 import { runMirror } from './mirror.js';
-import { hostsData, saveHost, removeHost, saveHostUnit, removeHostUnit, checkHostDeal, writeHostDeal, deleteHostDeal, addHostPayment, removeHostPayment } from './hosts.js';
+import { hostsData, saveHost, removeHost, saveHostUnit, removeHostUnit, checkHostDeal, writeHostDeal, deleteHostDeal, addHostPayment, removeHostPayment, quickAddHost } from './hosts.js';
 import { photosData, uploadPropertyPhoto, deletePropertyPhoto, deletePropertyPhotos, albumPage, albumImage } from './photos.js';
 import { clientIp, throttleCheck, recordFail, clearFails } from './throttle.js';
 import { uploadAvatar, deleteAvatar, getAvatar, avatarAt, avatarMap } from './avatars.js';
@@ -327,6 +327,7 @@ export default {
         case 'removeHostUnit':    out = await removeHostUnit(env, me, payload); break;
         case 'addHostPayment':    out = await addHostPayment(env, me, payload); break;
         case 'removeHostPayment': out = await removeHostPayment(env, me, payload); break;
+        case 'quickAddHost':      out = await quickAddHost(env, me, payload); break;
         case 'sweepIds':          out = await sweepExpiredIds(env); break;
         default: bad('Unknown action: ' + p.action);
       }

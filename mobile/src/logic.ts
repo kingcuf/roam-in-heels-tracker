@@ -1705,6 +1705,7 @@ export type LedgerEntry = {
 
 /* Channels that pay out to us, so a host cannot have collected the guest's money. */
 export const OTA_CHANNELS = ['Airbnb', 'Booking.com', 'MMT', 'Agoda'];
+export const FROM_HOST = 'From host';
 export const defaultCollector = (channel: string): 'host' | 'us' => (OTA_CHANNELS.indexOf(String(channel || '').trim()) >= 0 ? 'us' : 'host');
 
 const num0 = (x: any) => { const n = Number(x); return Number.isFinite(n) ? n : 0; };

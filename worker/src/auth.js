@@ -93,7 +93,7 @@ export const OPEN_ACTIONS = new Set([
   'saveTemplate', 'removeTemplate', 'setPropertyFacts',
   /* Sending a message is open to whoever can see the booking (the logs). */
   'logMessageSend', 'uploadMessageImage', 'deleteMessageImage', 'uploadPropertyPhoto', 'deletePropertyPhoto',
-  'saveHost', 'removeHost', 'saveHostUnit', 'removeHostUnit', 'addHostPayment', 'removeHostPayment',
+  'saveHost', 'removeHost', 'saveHostUnit', 'removeHostUnit', 'addHostPayment', 'removeHostPayment', 'quickAddHost',
 ]);
 
 export const rightLabel = (key) => {
