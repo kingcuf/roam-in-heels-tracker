@@ -23,7 +23,7 @@ import { hostsData, saveHost, removeHost, saveHostUnit, removeHostUnit, checkHos
 import { photosData, uploadPropertyPhoto, deletePropertyPhoto, deletePropertyPhotos, albumPage, albumImage } from './photos.js';
 import { clientIp, throttleCheck, recordFail, clearFails } from './throttle.js';
 import { uploadAvatar, deleteAvatar, getAvatar, avatarAt, avatarMap } from './avatars.js';
-import { idStatus, idDocs, listAttachments, uploadAttachment, getAttachment, deleteAttachment, sweepExpiredIds, AttachError, deleteBookingAttachments, messageImages, uploadMessageImage, deleteMessageImage } from './attachments.js';
+import { idStatus, idDocs, listAttachments, uploadAttachment, getAttachment, deleteAttachment, sweepExpiredIds, AttachError, deleteBookingAttachments, copyGuestIds, messageImages, uploadMessageImage, deleteMessageImage } from './attachments.js';
 import { authenticate, whoAmI, ACTION_RIGHTS, OPEN_ACTIONS, rightLabel, listUsers, addUser, updateUser, changePin, setRoleRights } from './auth.js';
 import { raiseTicket, listTickets, approveTicket, rejectTicket, withdrawTicket, approverName } from './tickets.js';
 
@@ -318,6 +318,7 @@ export default {
         case 'idStatus':          out = await idStatus(env); break;
         case 'idDocs':            out = await idDocs(env); break;
         case 'listAttachments':   out = await listAttachments(env, row); break;
+        case 'copyGuestIds':      out = await copyGuestIds(env, Number(payload.from), row, payload.pairs); break;
         case 'deleteAttachment':  out = await deleteAttachment(env, Number(p.id)); break;
         case 'deleteMessageImage': out = await deleteMessageImage(env, me, Number(p.id)); break;
         case 'deletePropertyPhoto': out = await deletePropertyPhoto(env, me, Number(p.id)); break;

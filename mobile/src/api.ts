@@ -254,6 +254,9 @@ export const api = {
   addHostPayment: (pin: string, d: { hostId: number; amount: number; direction: 'paid' | 'received'; date: string; mode: string; note: string }) =>
     call('addHostPayment', { pin, payload: d }),
   removeHostPayment: (pin: string, id: number) => call('removeHostPayment', { pin, payload: { id } }),
+  /* Returning guest: copy ID documents from a past booking (pairs: [fromSlot, toSlot]). */
+  copyGuestIds: (pin: string, toRow: number, from: number, pairs: [string, string][]) =>
+    call('copyGuestIds', { pin, row: toRow, payload: { from, pairs } }) as Promise<{ ok: boolean; copied: number; message: string }>,
   quickAddHost: (pin: string, d: { name: string; phone: string; unit: string }) =>
     call('quickAddHost', { pin, payload: d }) as Promise<{ ok: boolean; message: string; hostId: number; unitId: number }>,
 };

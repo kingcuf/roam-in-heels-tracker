@@ -264,3 +264,39 @@ export async function deleteMessageImage(env, me, id) {
   await env.DB.prepare('DELETE FROM attachments WHERE id = ?').bind(id).run();
   return { ok: true, message: 'Photo removed' };
 }
+
+/* Returning guest: copy their ID documents from a past booking onto this one.
+   pairs: [[fromSlot, toSlot], …] — e.g. a past co-guest becomes this booking's
+   lead. Each copy is a NEW object (own key, own row), so the six-month sweep
+   of the old booking never pulls a document out from under the new one. A
+   slot that already has a document on the new booking is left alone. */
+export async function copyGuestIds(env, fromRow, toRow, pairs) {
+  if (!fromRow || !toRow) fail('Both bookings are required');
+  if (fromRow === toRow) fail('Pick a different booking to copy from');
+  if (!env.FILES) fail('File storage is not configured');
+  const list = Array.isArray(pairs) ? pairs.slice(0, 26) : [];
+  const target = await env.DB.prepare('SELECT id FROM bookings WHERE id = ?').bind(toRow).first();
+  if (!target) fail('Booking not found');
+  let copied = 0;
+  for (const p of list) {
+    const from = String((p && p[0]) || ''), to = String((p && p[1]) || '');
+    if (!SLOTS.has(from) || !SLOTS.has(to)) continue;
+    const src = await env.DB.prepare(
+      `SELECT r2_key, filename, content_type, size_bytes FROM attachments
+        WHERE entity_type='booking' AND entity_id=? AND kind='id_proof' AND slot=?`).bind(fromRow, from).first();
+    if (!src) continue;
+    const has = await env.DB.prepare(
+      `SELECT 1 FROM attachments WHERE entity_type='booking' AND entity_id=? AND kind='id_proof' AND slot=?`).bind(toRow, to).first();
+    if (has) continue;
+    const obj = await env.FILES.get(src.r2_key);
+    if (!obj) continue;
+    const key = objectKey(toRow, to, src.filename);
+    await env.FILES.put(key, await obj.arrayBuffer(), { httpMetadata: { contentType: src.content_type } });
+    await env.DB.prepare(
+      `INSERT INTO attachments (entity_type, entity_id, kind, slot, r2_key, filename, content_type, size_bytes, uploaded_at)
+       VALUES ('booking', ?, 'id_proof', ?, ?, ?, ?, ?, ?)`
+    ).bind(toRow, to, key, src.filename, src.content_type, src.size_bytes, todayISO()).run();
+    copied++;
+  }
+  return { ok: true, copied, message: copied ? copied + ' ID document' + (copied === 1 ? '' : 's') + ' copied from the past stay' : 'No ID documents to copy' };
+}

@@ -16,6 +16,12 @@ export type KnownGuest = {
   lastProp: string;
   lastUnit: string;
   stayingNow: boolean;
+  /* Their most recent booking, which guest they were on it (1 = lead, 2 =
+     co-guest, 3+ = further guests), and — when they led it — who came with
+     them, so picking them can bring the whole party back. */
+  lastRow: number;
+  lastPos: number;
+  party: { name: string; birthYr: string }[];
 };
 
 const norm = (s: string) => s.trim().replace(/\s+/g, ' ').toLowerCase();
@@ -34,12 +40,15 @@ export function useGuestDirectory(excludeRow?: number) {
       const key = ci ? dayKeyOf(ci) : '';
       const outKey = co ? dayKeyOf(co) : key;
       const staying = !!key && key <= today && outKey > today;
-      const add = (name: any, birth: any, phone: string) => {
+      const others = [{ name: String(c[15] ?? '').trim(), birthYr: String(c[16] ?? '').trim() },
+        ...parseExtraGuests(c[27]).map((x) => ({ name: String(x.name || '').trim(), birthYr: String(x.birthYr || '').trim() }))];
+      const add = (name: any, birth: any, phone: string, pos: number) => {
         const n = String(name ?? '').trim();
         if (n.length < 2) return;
         const k = norm(n);
         const g = map.get(k) || {
           name: n, birthYr: '', phone: '', stays: 0, lastKey: '', lastProp: '', lastUnit: '', stayingNow: false,
+          lastRow: 0, lastPos: 0, party: [],
         };
         g.stays += 1;
         g.stayingNow = g.stayingNow || staying;
@@ -47,12 +56,16 @@ export function useGuestDirectory(excludeRow?: number) {
         const b = String(birth ?? '').trim();
         if (b && (newer || !g.birthYr)) g.birthYr = b;
         if (phone && (newer || !g.phone)) g.phone = phone;
-        if (newer) { g.lastKey = key; g.lastProp = String(c[1] ?? ''); g.lastUnit = String(c[24] ?? ''); g.name = n; }
+        if (newer) {
+          g.lastKey = key; g.lastProp = String(c[1] ?? ''); g.lastUnit = String(c[24] ?? ''); g.name = n;
+          g.lastRow = o.r; g.lastPos = pos;
+          g.party = pos === 1 ? others.filter((x) => x.name.length >= 2) : [];
+        }
         map.set(k, g);
       };
-      add(c[2], c[14], String(c[13] ?? '').trim());
-      add(c[15], c[16], '');
-      parseExtraGuests(c[27]).forEach((x) => add(x.name, x.birthYr, ''));
+      add(c[2], c[14], String(c[13] ?? '').trim(), 1);
+      add(c[15], c[16], '', 2);
+      parseExtraGuests(c[27]).forEach((x, i) => add(x.name, x.birthYr, '', i + 3));
     });
     return map;
   }, [rows, excludeRow]);
@@ -118,6 +131,7 @@ export function GuestNameInput({ value, onChange, onPick, dir, exclude, placehol
               <View style={st.avatar}><Text style={st.avatarTxt}>{g.name.slice(0, 1).toUpperCase()}</Text></View>
               <View style={{ flex: 1 }}>
                 <Text style={st.name} numberOfLines={1}>{g.name}</Text>
+                {g.party.length ? <Text style={st.party} numberOfLines={1}>{'with ' + g.party.map((x) => x.name).join(', ')}</Text> : null}
                 <Text style={st.meta} numberOfLines={1}>
                   {[g.birthYr && 'b. ' + g.birthYr, g.phone, g.stays + ' stay' + (g.stays === 1 ? '' : 's'),
                     g.lastKey && 'last ' + fmt(g.lastKey) + (g.lastUnit ? ' · ' + g.lastUnit : g.lastProp ? ' · ' + g.lastProp : '')]
@@ -147,6 +161,7 @@ const st = StyleSheet.create({
   avatar: { width: 30, height: 30, borderRadius: 15, backgroundColor: 'rgba(233,185,110,0.22)', alignItems: 'center', justifyContent: 'center' },
   avatarTxt: { fontFamily: F.xbold, fontSize: 13, color: G.gold3 },
   name: { fontFamily: F.bold, fontSize: 14, color: C.ink },
+  party: { fontFamily: F.semi, fontSize: 11.5, color: C.blue2, marginTop: 1 },
   meta: { fontFamily: F.med, fontSize: 11.5, color: C.bark, marginTop: 1 },
   now: { fontFamily: F.bold, fontSize: 10.5, color: C.green, backgroundColor: C.greenbg, paddingVertical: 3, paddingHorizontal: 8, borderRadius: 999, overflow: 'hidden' },
 });

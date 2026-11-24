@@ -27,7 +27,7 @@ export async function hostsData(env) {
   const [h, u, d, p] = await env.DB.batch([
     env.DB.prepare(`SELECT id, name, phone, notes, updated_at FROM hosts WHERE removed_at = '' ORDER BY name COLLATE NOCASE`),
     env.DB.prepare(`SELECT * FROM host_units WHERE removed_at = '' ORDER BY host_id, unit`),
-    env.DB.prepare(`SELECT booking_row, host_id, unit_id, collected_by, settled, updated_by, updated_at FROM host_deals`),
+    env.DB.prepare(`SELECT * FROM host_deals`),
     env.DB.prepare(`SELECT id, host_id, txn_date, amount, direction, mode, note, created_by, created_at FROM host_payments WHERE removed_at = '' ORDER BY txn_date, id`),
   ]);
   return { hosts: h.results || [], units: u.results || [], deals: d.results || [], payments: p.results || [] };
@@ -105,7 +105,13 @@ export async function checkHostDeal(env, deal) {
     if (!u) fail('That unit does not belong to the host');
   }
   const collected = deal.collectedBy === 'us' ? 'us' : 'host';
-  return { hostId, unitId, collected };
+  let share = null;
+  if (deal.hostShare !== undefined && deal.hostShare !== null && String(deal.hostShare).trim() !== '') {
+    share = Number(String(deal.hostShare).replace(/,/g, ''));
+    if (!Number.isFinite(share) || share < 0) fail('Host’s share must be an amount of ₹0 or more');
+    share = Math.round(share * 100) / 100;
+  }
+  return { hostId, unitId, collected, share };
 }
 
 /* deal: undefined = leave as is · null = remove · object = set. */
@@ -113,11 +119,12 @@ export async function writeHostDeal(env, me, row, deal) {
   if (deal === undefined) return;
   if (deal === null) { await env.DB.prepare(`DELETE FROM host_deals WHERE booking_row = ?`).bind(row).run(); return; }
   await env.DB.prepare(
-    `INSERT INTO host_deals (booking_row, host_id, unit_id, collected_by, settled, updated_at, updated_by)
-     VALUES (?, ?, ?, ?, 0, ?, ?)
+    `INSERT INTO host_deals (booking_row, host_id, unit_id, collected_by, settled, updated_at, updated_by, host_share)
+     VALUES (?, ?, ?, ?, 0, ?, ?, ?)
      ON CONFLICT(booking_row) DO UPDATE SET host_id = excluded.host_id, unit_id = excluded.unit_id,
-       collected_by = excluded.collected_by, settled = 0, updated_at = excluded.updated_at, updated_by = excluded.updated_by`
-  ).bind(row, deal.hostId, deal.unitId, deal.collected, now(), (me && me.username) || '').run();
+       collected_by = excluded.collected_by, settled = 0, updated_at = excluded.updated_at, updated_by = excluded.updated_by,
+       host_share = excluded.host_share`
+  ).bind(row, deal.hostId, deal.unitId, deal.collected, now(), (me && me.username) || '', deal.share).run();
 }
 
 export async function deleteHostDeal(env, row) {

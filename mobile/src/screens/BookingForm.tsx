@@ -6,7 +6,7 @@ import { confirmDestructive, useToast } from '../ui';
 import { Field, TxtInput, SelectField, DateField, TimeField } from '../fields';
 import { api } from '../api';
 import IdUploader, { StagedFile } from './IdUploader';
-import { ExtraGuest, Host, HostUnit, HostsData, IdSlot, dealOf, defaultCollector, hostById, unitById, frontForGuest, ownedPropertyName, parseExtraGuests, splitPreview, todayIso, unitNumberOf } from '../logic';
+import { ExtraGuest, Host, HostUnit, HostsData, OTA_CHANNELS, IdSlot, dealOf, defaultCollector, hostById, unitById, frontForGuest, ownedPropertyName, parseExtraGuests, splitPreview, todayIso, unitNumberOf } from '../logic';
 import { BookingChecklist, ExtraStep, NewBookingSteps } from '../checklist';
 import { isMoneyText, moneyNum, moneyRule } from '../money';
 import { GuestNameInput, KnownGuest, useGuestDirectory } from '../guests';
@@ -18,6 +18,8 @@ import TicketBanner, { NoAdd, writeLabels } from './TicketBanner';
 /* 'Offline' became 'From host' (24-Nov-2026) and 'Pass' left the list — a Pass
    booking still stores channel 'Pass', set by its type. Older values show as an
    extra chip when editing, so a save never rewrites them silently. */
+const MON3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const fmtKey = (k: string) => (k ? Number(k.slice(8, 10)) + ' ' + MON3[Number(k.slice(5, 7)) - 1] : '');
 const CHANNELS = ['Airbnb', 'Booking.com', 'MMT', 'Agoda', 'From host', 'Direct/Referral'];
 
 /* Field names as the person reads them, for "Still needed: …". */
@@ -82,11 +84,19 @@ export default function BookingForm() {
   /* Guests: 1 = lead (with phone), 2 = co-guest, 3+ = extras. The count is
      simply how many guests have been added. */
   const [nGuests, setNGuests] = useState(1);
+  /* Returning guests: ID documents to copy from their past booking on save,
+     keyed by the guest slot on THIS booking ('lead', 'co', 'g3' …). */
+  const [idOpen, setIdOpen] = useState<Record<string, boolean>>({});   // ID uploader unfolded per guest
+  const onFile = (front: string) => !!s.editB && ((s.idMap as any)?.[String(s.editB.row)] || []).some((x: string) => x === front || x === front + '-back');
+  const [idCopies, setIdCopies] = useState<Record<string, { fromRow: number; fromFront: string; when: string }>>({});
   const [partner, setPartner] = useState(false);   // "Host's flat…" chosen, unit not picked yet
   /* The host deal (Setup → Hosts). null = none. `hadDeal` remembers an edit
      started with one, so removing it is sent as an explicit null. */
   const [deal, setDeal] = useState<{ hostId: number; unitId: number; collectedBy: 'host' | 'us' } | null>(null);
   const [hadDeal, setHadDeal] = useState(false);
+  /* What the host gets out of this booking. The Commission box then holds only
+     the platform's (or other) commission; the booking still stores the total. */
+  const [hostShare, setHostShare] = useState('');
   const [fromHost, setFromHost] = useState(false);   // "Their guest → our flat" picker open
   const hostsData = s.logs?.hosts;
   const [extras, setExtras] = useState<ExtraGuest[]>([]);
@@ -148,13 +158,17 @@ export default function BookingForm() {
       setF(base);
       const dl = dealOf(s.logs?.hosts, s.editB.row);
       setDeal(dl ? { hostId: dl.host_id, unitId: dl.unit_id, collectedBy: dl.collected_by } : null);
-      setHadDeal(!!dl); setFromHost(false); setPartner(false);
+      const hs = dl && dl.host_share !== null && dl.host_share !== undefined ? Number(dl.host_share) : null;
+      setHostShare(hs !== null ? String(hs) : '');
+      /* The booking stores everything deducted; show only the non-host part here. */
+      if (hs !== null && base.commission !== '' && isMoneyText(base.commission)) setF((p) => ({ ...p, commission: String(Math.round((moneyNum(base.commission) - hs) * 100) / 100) }));
+      setHadDeal(!!dl); setFromHost(false); setPartner(false); setIdCopies({});
       const ex = parseExtraGuests(c[27]);
       const n = Math.max(1, base.coGuest.trim() ? 2 : 1, ex.length ? 2 + ex.length : 1, Number(base.guests) || 1);
       setNGuests(Math.min(12, n));
       setExtras([...ex, ...Array.from({ length: Math.max(0, n - 2 - ex.length) }, () => ({ name: '', birthYr: '' }))]);
     } else {
-      setNGuests(1); setExtras([]); setDeal(null); setHadDeal(false);
+      setNGuests(1); setExtras([]); setDeal(null); setHadDeal(false); setIdCopies({}); setHostShare('');
       setF((p) => ({
         ...EMPTY,
         date: todayIso(),
@@ -169,9 +183,11 @@ export default function BookingForm() {
      ₹4 instead of ₹4,000 while the server, which strips separators, agreed with
      neither. The box itself now refuses the comma, and this reads it the same
      way the box and the worker do. */
-  const autoComm = (gp: string, net: string) => {
+  /* Commission = paid − net − the host's share (when a host is on the booking). */
+  const autoComm = (gp: string, net: string, hs: string = hostShare) => {
     if (!isMoneyText(gp) || !isMoneyText(net)) return;
-    setF((p) => ({ ...p, commission: String(Math.round((moneyNum(gp) - moneyNum(net)) * 100) / 100) }));
+    const h = deal && hs !== '' && isMoneyText(hs) ? moneyNum(hs) : 0;
+    setF((p) => ({ ...p, commission: String(Math.round((moneyNum(gp) - moneyNum(net) - h) * 100) / 100) }));
   };
 
 
@@ -199,7 +215,7 @@ export default function BookingForm() {
     setStaged({});
     setNGuests(1); setExtras([]); setSteps([]);
     setF({ ...EMPTY, date: todayIso(), property: s.props[0]?.name || '' });
-    setPartner(false); setDeal(null); setHadDeal(false); setFromHost(false);
+    setPartner(false); setDeal(null); setHadDeal(false); setFromHost(false); setIdCopies({}); setIdOpen({}); setHostShare('');
   };
 
   const submit = async () => {
@@ -216,7 +232,11 @@ export default function BookingForm() {
       coGuestBirthYr: nGuests >= 2 ? f.coGuestBirthYr : '',
       extraGuests: extras.slice(0, Math.max(0, nGuests - 2)),
       repeat: f.repeat === 'Yes' ? '1' : '',
-      hostDeal: deal ? { hostId: deal.hostId, unitId: deal.unitId, collectedBy: deal.collectedBy } : hadDeal ? null : undefined,
+      hostDeal: deal ? { hostId: deal.hostId, unitId: deal.unitId, collectedBy: deal.collectedBy, hostShare: hostShare.trim() === '' ? null : hostShare } : hadDeal ? null : undefined,
+      /* Stored commission stays "everything deducted": platform/other + host's share. */
+      commission: deal && hostShare.trim() !== '' && isMoneyText(hostShare)
+        ? String(Math.round(((isMoneyText(f.commission) && f.commission !== '' ? moneyNum(f.commission) : 0) + moneyNum(hostShare)) * 100) / 100)
+        : f.commission,
     };
     const e: Errs = {};
     if (!d.property) e.property = 'Pick the property this booking is for.';
@@ -225,6 +245,7 @@ export default function BookingForm() {
        number — the API's num() would silently coerce it to 0. */
     if (d.net === '') e.net = 'Enter what you keep from this booking.';
     else if (!isMoneyText(d.net)) e.net = moneyRule('Net earned');
+    if (deal && hostShare.trim() !== '' && !isMoneyText(hostShare)) { toast(moneyRule('Host’s share'), false); return; }
     setErrs(e);
     const missing = (Object.keys(e) as (keyof typeof EMPTY)[]).map((k) => LABEL[k]);
     if (missing.length) {
@@ -251,6 +272,20 @@ export default function BookingForm() {
             try { await api.uploadAttachment(s.pin, res.row, k, staged[k]!); } catch { failed++; }
           }
           if (failed) toast(`Booking saved, but ${failed} ID upload${failed > 1 ? 's' : ''} failed — reopen it to retry`, false);
+        }
+      }
+      /* Returning guests' IDs: copied server-side from their past booking.
+         A file picked for the same guest here wins over the copy. */
+      const target = s.editB ? s.editB.row : res?.row;
+      if (target && Object.keys(idCopies).length) {
+        const byRow: Record<number, [string, string][]> = {};
+        for (const [to, c] of Object.entries(idCopies)) {
+          if (staged[to as IdSlot]) continue;
+          (byRow[c.fromRow] = byRow[c.fromRow] || []).push([c.fromFront, to], [c.fromFront + '-back', to + '-back']);
+        }
+        for (const [from, pairs] of Object.entries(byRow)) {
+          try { await api.copyGuestIds(s.pin, target, Number(from), pairs); }
+          catch { toast('Booking saved, but past IDs could not be copied — upload them from the booking', false); }
         }
       }
       toast(res?.message || 'Saved', true);
@@ -337,7 +372,7 @@ export default function BookingForm() {
     if (!deal || !dealHost) return '';
     const first = dealHost.name.split(' ')[0];
     if (deal.collectedBy === 'host') return isMoneyText(f.net) && f.net !== '' ? first + ' will owe you ' + inr(moneyNum(f.net)) + ' (your net)' : first + ' will owe you your net — fill in Net earned';
-    return isMoneyText(f.commission) && f.commission !== '' ? 'You’ll owe ' + first + ' ' + inr(Math.abs(moneyNum(f.commission))) + ' (their share)' : 'You’ll owe ' + first + ' their share — fill in the Money card';
+    return hostShare !== '' && isMoneyText(hostShare) ? 'You’ll owe ' + first + ' ' + inr(moneyNum(hostShare)) + ' (their share)' : 'You’ll owe ' + first + ' their share — enter it below';
   })();
   /* Choosing one of OUR flats: a host picked under "Came from" stays (their
      guest, our flat); a host flat picked under Stay alone is dropped. */
@@ -348,6 +383,7 @@ export default function BookingForm() {
     setPartner(false);
     if (deal && deal.unitId) setDeal(hostInBooking ? { ...deal, unitId: 0 } : null);
   };
+  const isOta = OTA_CHANNELS.indexOf(f.channel) >= 0;
   const hostUnitsOf = (id: number) => (hostsData?.units || []).filter((u) => u.host_id === id);
   const pickHostUnit = (u: HostUnit) => {
     setDeal({ hostId: u.host_id, unitId: u.id, collectedBy: deal?.collectedBy || defaultCollector(f.channel) });
@@ -408,10 +444,41 @@ export default function BookingForm() {
     else if (i === 1) setF((p) => ({ ...p, ...(g.name !== undefined && { coGuest: g.name }), ...(g.birthYr !== undefined && { coGuestBirthYr: g.birthYr }) }));
     else setExtras((x) => { const y = [...x]; while (y.length < i - 1) y.push({ name: '', birthYr: '' }); y[i - 2] = { ...y[i - 2], ...g }; return y; });
   };
+  /* Picking a past guest brings back what we know: their details, and — when
+     they led their last booking and this is the primary guest — the people who
+     came with them, plus the ID documents already on file for each. */
+  const docsOf = (row: number) => new Set(((s.idDocs || {})[String(row)] || []).map((d: any) => String(d.slot)));
   const pick = (i: number, k: KnownGuest) => {
     setGuest(i, { name: k.name, birthYr: k.birthYr });
     if (i === 0) setF((p) => ({ ...p, phone: k.phone || p.phone, repeat: 'Yes' }));
-    toast(`${k.name} — details filled from ${k.stays} past stay${k.stays === 1 ? '' : 's'}`, true);
+    const have = k.lastRow ? docsOf(k.lastRow) : new Set<string>();
+    const when = k.lastKey ? fmtKey(k.lastKey) : 'last';
+    const copies: Record<string, { fromRow: number; fromFront: string; when: string }> = {};
+    const queue = (toPos: number, fromPos: number) => {
+      const from = frontForGuest(fromPos);
+      if (have.has(from)) copies[frontForGuest(toPos)] = { fromRow: k.lastRow, fromFront: from, when };
+    };
+    queue(i + 1, k.lastPos || 1);
+    const names = [k.name];
+    if (i === 0 && k.lastPos === 1 && k.party.length) {
+      /* Fill the party into empty guest slots only — never over a typed name. */
+      const party = k.party.slice(0, 11);
+      party.forEach((g, j) => {
+        const pos = j + 2;
+        if (guestAt(pos - 1).name.trim()) return;
+        setGuest(pos - 1, { name: g.name, birthYr: g.birthYr });
+        queue(pos, pos);
+        names.push(g.name);
+      });
+      const need = Math.min(12, 1 + party.length);
+      if (need > nGuests) {
+        setExtras((x) => { const y = [...x]; while (y.length < need - 2) y.push({ name: '', birthYr: '' }); party.slice(1).forEach((g, j) => { if (!y[j].name) y[j] = { name: g.name, birthYr: g.birthYr }; }); return y; });
+        setNGuests(need);
+      }
+    }
+    setIdCopies((x) => ({ ...x, ...copies }));
+    const nIds = Object.keys(copies).length;
+    toast(names.join(' + ') + ' — from the ' + when + ' stay' + (nIds ? ' · ' + nIds + ' ID' + (nIds === 1 ? '' : 's') + ' attach on save' : ''), true);
   };
   const addGuest = () => {
     if (nGuests >= 12) return;
@@ -426,6 +493,7 @@ export default function BookingForm() {
     setGuest(i, { name: '', birthYr: '' });
     const fr = frontForGuest(i + 1);
     setStaged((x) => { const y = { ...x }; delete y[fr]; delete y[(fr + '-back') as IdSlot]; return y; });
+    setIdCopies((x) => { const y = { ...x }; delete y[fr]; return y; });
     setNGuests(i);
   };
   const namesOnBooking = Array.from({ length: nGuests }, (_, i) => guestAt(i).name).filter(Boolean);
@@ -584,61 +652,78 @@ export default function BookingForm() {
           ) : null}
         </FormCard>
 
-        <FormCard title="Guests" step={3} i={3}
-          note={`${nGuests} guest${nGuests === 1 ? '' : 's'} · type a name to pick from past stays · ` +
-            (editing ? 'ID front is required, back optional' : 'IDs upload when the booking is saved')}>
+        <FormCard title="Guests" step={3} i={3}>
           {Array.from({ length: nGuests }, (_, i) => {
             const g = guestAt(i);
             const last = i === nGuests - 1 && i > 0;
+            const front = frontForGuest(i + 1);
+            const copy = idCopies[front] && !staged[front as IdSlot] ? idCopies[front] : null;
             return (
-              <View key={i} style={st.guest}>
+              <View key={i} style={[st.guest, i === 0 && st.guestLead]}>
                 <View style={st.guestHead}>
-                  <View style={st.gNum}><Text style={st.gNumTxt}>{i + 1}</Text></View>
-                  <Text style={st.gTitle}>{i === 0 ? 'Primary guest' : `Guest ${i + 1}`}</Text>
+                  <Text style={st.gTitle}>{i === 0 ? 'Primary guest' : 'Guest ' + (i + 1)}</Text>
                   <View style={{ flex: 1 }} />
-                  {last ? (
+                  {i === 0 ? (
+                    <TouchableOpacity onPress={() => set('repeat')(f.repeat === 'Yes' ? 'No' : 'Yes')} hitSlop={6}
+                      accessibilityRole="switch" accessibilityState={{ checked: f.repeat === 'Yes' }}
+                      style={[st.retPill, f.repeat === 'Yes' && st.retPillOn]}>
+                      <Text style={[st.retPillT, f.repeat === 'Yes' && st.retPillTOn]}>{f.repeat === 'Yes' ? '✓ Returning guest' : 'Returning guest?'}</Text>
+                    </TouchableOpacity>
+                  ) : last ? (
                     <TouchableOpacity onPress={removeLast} hitSlop={8} accessibilityLabel={`Remove guest ${i + 1}`}>
                       <Text style={st.gRemove}>Remove</Text>
                     </TouchableOpacity>
                   ) : null}
                 </View>
-                <Two>
+                <View style={st.two}>
                   <View style={{ flex: 1, minWidth: 0 }}>
-                    <Field label="Name">
-                      <GuestNameInput
-                        value={g.name}
-                        onChange={(v) => setGuest(i, { name: v })}
-                        onPick={(k) => pick(i, k)}
-                        dir={dir}
-                        exclude={namesOnBooking}
-                        placeholder={i === 0 ? 'Primary guest name' : 'Guest name'}
-                      />
-                    </Field>
+                    <GuestNameInput
+                      value={g.name}
+                      onChange={(v) => setGuest(i, { name: v })}
+                      onPick={(k) => pick(i, k)}
+                      dir={dir}
+                      exclude={namesOnBooking}
+                      placeholder={i === 0 ? 'Name — type to find a past guest' : 'Name'}
+                    />
                   </View>
-                  <View style={{ width: 92 }}>
-                    <Field label="Birth yr">
-                      <TxtInput value={g.birthYr} onChange={(v) => setGuest(i, { birthYr: v })} placeholder="1998" keyboardType="numeric" />
-                    </Field>
-                  </View>
-                </Two>
+                  {i > 0 ? (
+                    <View style={{ width: 96 }}>
+                      <TxtInput value={g.birthYr} onChange={(v) => setGuest(i, { birthYr: v })} placeholder="Birth yr" keyboardType="numeric" />
+                    </View>
+                  ) : null}
+                </View>
                 {i === 0 ? (
-                  <Two>
+                  <View style={[st.two, { marginTop: 10 }]}>
                     <View style={{ flex: 1, minWidth: 0 }}>
-                      <Field label="Phone"><TxtInput value={f.phone} onChange={set('phone')} keyboardType="phone-pad" /></Field>
+                      <TxtInput value={f.phone} onChange={set('phone')} keyboardType="phone-pad" placeholder="Mobile" />
                     </View>
-                    <View style={{ width: 118 }}>
-                      <Field label="Repeat guest">
-                        <SelectField title="Repeat Customer" value={f.repeat || 'No'} options={['No', 'Yes']} onChange={set('repeat')} />
-                      </Field>
+                    <View style={{ width: 96 }}>
+                      <TxtInput value={g.birthYr} onChange={(v) => setGuest(i, { birthYr: v })} placeholder="Birth yr" keyboardType="numeric" />
                     </View>
-                  </Two>
+                  </View>
                 ) : null}
-                <IdUploader
-                  row={editing ? s.editB!.row : 0}
-                  guest="" coGuest="" needsCo={false}
-                  only={frontForGuest(i + 1)} compact
-                  {...(editing ? {} : { staged, onStage })}
-                />
+                {copy ? (
+                  <View style={st.copyRow}>
+                    <Text style={st.copyT}>{'✓ ID from the ' + copy.when + ' stay — attaches on save'}</Text>
+                    <TouchableOpacity onPress={() => { setIdCopies((x) => { const y = { ...x }; delete y[front]; return y; }); setIdOpen((x) => ({ ...x, [front]: true })); }} hitSlop={8}>
+                      <Text style={st.link}>Use a different ID</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : idOpen[front] || staged[front as IdSlot] || staged[(front + '-back') as IdSlot] || (editing && onFile(front)) ? (
+                  <IdUploader
+                    row={editing ? s.editB!.row : 0}
+                    guest="" coGuest="" needsCo={false}
+                    only={front} compact
+                    {...(editing ? {} : { staged, onStage })}
+                  />
+                ) : (
+                  <TouchableOpacity style={st.idLine} onPress={() => setIdOpen((x) => ({ ...x, [front]: true }))} activeOpacity={0.7}>
+                    <Text style={st.idLineT}>ID document</Text>
+                    <Text style={st.idMissing}>Missing</Text>
+                    <View style={{ flex: 1 }} />
+                    <Text style={st.link}>+ Add ID</Text>
+                  </TouchableOpacity>
+                )}
               </View>
             );
           })}
@@ -689,16 +774,47 @@ export default function BookingForm() {
           <SplitNote split={split} pend={splitPend} prop={f.property} />
           <Two>
             <View style={{ flex: 1 }}>
-              <Field label={deal ? (deal.unitId ? 'Host’s share (₹)' : 'Host’s commission (₹)') : 'Commission (₹)'} hint="Auto = paid − net.">
+              {/* Platform channels take a fee; everything else may pay a referral commission. */}
+              <Field label={isOta ? 'Platform commission (₹)' : 'Commission (₹)'}
+                hint={deal ? 'Auto = paid − net − host’s share.' : 'Auto = paid − net.'}>
                 <TxtInput value={f.commission} onChange={set('commission')} money onFocus={() => revealCard('money')} />
               </Field>
             </View>
-            <View style={{ flex: 1 }}>
-              <Field label="Pending (₹)" hint="Still to be received.">
-                <TxtInput value={f.pending} onChange={set('pending')} money onFocus={() => revealCard('money')} />
-              </Field>
-            </View>
+            {deal && dealHost ? (
+              <View style={{ flex: 1 }}>
+                <Field label="Host’s share (₹)" hint={'What ' + dealHost.name.split(' ')[0] + ' gets from this booking.'}>
+                  <TxtInput value={hostShare} onChange={(v) => { setHostShare(v); autoComm(f.guestPaid, f.net, v); }} money onFocus={() => revealCard('money')} />
+                </Field>
+              </View>
+            ) : (
+              <View style={{ flex: 1 }}>
+                <Field label="Pending (₹)" hint="Still to be received.">
+                  <TxtInput value={f.pending} onChange={set('pending')} money onFocus={() => revealCard('money')} />
+                </Field>
+              </View>
+            )}
           </Two>
+          {deal && dealHost ? (
+            <Two>
+              <View style={{ flex: 1 }}>
+                <Field label="Pending (₹)" hint="Still to be received.">
+                  <TxtInput value={f.pending} onChange={set('pending')} money onFocus={() => revealCard('money')} />
+                </Field>
+              </View>
+              <View style={{ flex: 1 }} />
+            </Two>
+          ) : null}
+          {/* The answer to "what do I make, and what do I owe" in one line. */}
+          {isMoneyText(f.net) && f.net !== '' ? (
+            <View style={st.moneySum}>
+              <Text style={st.moneySumT}>{'You earn ' + inr(moneyNum(f.net))}</Text>
+              {deal && dealHost && hostShare !== '' && isMoneyText(hostShare) ? (
+                <Text style={st.moneySumS}>{deal.collectedBy === 'us'
+                  ? 'You owe ' + dealHost.name.split(' ')[0] + ' ' + inr(moneyNum(hostShare))
+                  : dealHost.name.split(' ')[0] + ' collected — they owe you ' + inr(moneyNum(f.net))}</Text>
+              ) : null}
+            </View>
+          ) : null}
         </FormCard>
         </View>
 
@@ -872,7 +988,20 @@ const st = StyleSheet.create({
   },
   splitTxt: { fontFamily: F.semi, fontSize: 12.5, color: C.blue2, lineHeight: 18 },
   guest: { borderWidth: 1, borderColor: C.hair, borderRadius: 16, padding: 12, marginBottom: 12, backgroundColor: 'rgba(255,255,255,0.6)' },
-  guestHead: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
+  guestHead: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
+  guestLead: { backgroundColor: '#fff' },
+  retPill: { borderRadius: 999, borderWidth: 1, borderColor: C.line, paddingVertical: 4, paddingHorizontal: 10 },
+  retPillOn: { backgroundColor: C.greenbg, borderColor: C.greenbg },
+  retPillT: { fontFamily: F.semi, fontSize: 11.5, color: C.muted },
+  retPillTOn: { color: C.green, fontFamily: F.bold },
+  copyRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10, padding: 10, borderRadius: 12, backgroundColor: C.greenbg },
+  idLine: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 12, borderWidth: 1, borderColor: C.hair, backgroundColor: '#fff' },
+  idLineT: { fontFamily: F.semi, fontSize: 13, color: C.bark },
+  idMissing: { fontFamily: F.bold, fontSize: 11, color: C.red, backgroundColor: C.redbg, paddingVertical: 2, paddingHorizontal: 8, borderRadius: 999, overflow: 'hidden' },
+  moneySum: { marginTop: 4, padding: 12, borderRadius: 14, backgroundColor: C.greenbg, gap: 2 },
+  moneySumT: { fontFamily: F.xbold, fontSize: 15, color: C.green },
+  moneySumS: { fontFamily: F.semi, fontSize: 12.5, color: C.ink },
+  copyT: { flex: 1, fontFamily: F.semi, fontSize: 12.5, color: C.green },
   gNum: { width: 22, height: 22, borderRadius: 11, backgroundColor: C.navy, alignItems: 'center', justifyContent: 'center' },
   gNumTxt: { color: '#fff', fontFamily: F.bold, fontSize: 11 },
   gTitle: { fontFamily: F.bold, fontSize: 14, color: C.ink },

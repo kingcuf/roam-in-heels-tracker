@@ -36,6 +36,7 @@ const rows = [bk(1, { inD: '2026-11-05', unit: '3103' }), bk(2, { inD: '2026-11-
 
 eq('host collected → host owes us our net', dealAmount(data.deals[0], rows[0].cells), 600);
 eq('we collected → we owe their share', dealAmount(data.deals[1], rows[1].cells), -1800);
+eq('entered host share beats the whole commission', dealAmount({ ...data.deals[1], host_share: 1200 }, rows[1].cells), -1200);
 eq('settled history counts nothing', dealAmount(data.deals[2], rows[2].cells), 0);
 
 {

@@ -77,7 +77,7 @@ export const ACTION_RIGHTS = {
   addTask: 'action.manage', updateTask: 'action.manage', setTaskDone: 'action.manage', deleteTask: 'action.manage',
   setEnquiryStatus: 'action.manage',
   /* A guest's ID document is part of the booking record. */
-  uploadAttachment: 'booking.update', deleteAttachment: 'booking.update',
+  uploadAttachment: 'booking.update', deleteAttachment: 'booking.update', copyGuestIds: 'booking.update',
   approveTicket: 'tickets.approve', rejectTicket: 'tickets.approve',
   users: 'users.manage', addUser: 'users.manage', updateUser: 'users.manage', setRoleRights: 'users.manage',
   mirrorNow: 'users.manage', sweepIds: 'users.manage',

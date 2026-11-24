@@ -13,7 +13,7 @@ import { Btn } from '../ui';
 import { BookingChecklist } from '../checklist';
 import { BookingMessages } from '../messages';
 import {
-  ageFrom, bannerUnitOf, dealAmount, dealOf, hostById, hostLedger, unitById, cardOf, checklistFor, ciFmtDay, ciNum, ciParse, idSlotsOf, IdSlot, parseExtraGuests,
+  ageFrom, bannerUnitOf, OTA_CHANNELS, hostShareOf, platformCommOf, dealAmount, dealOf, hostById, hostLedger, unitById, cardOf, checklistFor, ciFmtDay, ciNum, ciParse, idSlotsOf, IdSlot, parseExtraGuests,
   reviewStatusOf, splitOf, stayPhase, StayPhase, stayPropOf,
 } from '../logic';
 import { coverFor } from '../unitCovers';
@@ -325,7 +325,13 @@ function Details({ row, c, b, stayProp, split, unit }: {
         {b.listPrice ? <Row label="List price" value={inr(b.listPrice)} /> : null}
         {discount ? <Row label="Discount" value={'− ' + inr(discount)} /> : null}
         <Row label="Guest paid" value={b.paid ? inr(b.paid) : ''} />
-        {commission ? <Row label={deal ? (deal.unit_id ? 'Host’s share' : 'Host’s commission') : 'Commission'} value={'− ' + inr(commission)} /> : null}
+        {/* Platform (or other) commission and the host's share, apart. */}
+        {deal ? (
+          <>
+            {platformCommOf(deal, c) ? <Row label={OTA_CHANNELS.indexOf(String(c[4] || '')) >= 0 ? 'Platform commission' : 'Commission'} value={'− ' + inr(platformCommOf(deal, c))} /> : null}
+            <Row label="Host’s share" value={'− ' + inr(hostShareOf(deal, c))} />
+          </>
+        ) : commission ? <Row label={OTA_CHANNELS.indexOf(String(c[4] || '')) >= 0 ? 'Platform commission' : 'Commission'} value={'− ' + inr(commission)} /> : null}
         {split ? <Row label="Split fee" value={inr(split.fee)} /> : null}
         <Row label="Net earned" value={inr(b.net)} tone={C.green} strong />
         <Row label="Awaiting payout" value={b.pending > 0 ? inr(b.pending) : 'Nothing due'} tone={b.pending > 0 ? C.red : C.muted} />

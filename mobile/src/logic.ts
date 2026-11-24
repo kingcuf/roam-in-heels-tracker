@@ -1695,7 +1695,7 @@ export type HostUnit = {
   wifi_name: string; wifi_password: string; checkin_time: string; checkout_time: string;
   caretaker_name: string; caretaker_phone: string; notes: string;
 };
-export type HostDeal = { booking_row: number; host_id: number; unit_id: number; collected_by: 'host' | 'us'; settled: number; updated_by?: string; updated_at?: string };
+export type HostDeal = { booking_row: number; host_id: number; unit_id: number; collected_by: 'host' | 'us'; settled: number; host_share?: number | null; updated_by?: string; updated_at?: string };
 export type HostPayment = { id: number; host_id: number; txn_date: string; amount: number; direction: 'paid' | 'received'; mode: string; note: string; created_by?: string };
 export type HostsData = { hosts: Host[]; units: HostUnit[]; deals: HostDeal[]; payments: HostPayment[] };
 export type LedgerEntry = {
@@ -1713,10 +1713,17 @@ export const dealOf = (data: HostsData | undefined, row: number) => (data?.deals
 export const hostById = (data: HostsData | undefined, id: number) => (data?.hosts || []).find((h) => h.id === id) || null;
 export const unitById = (data: HostsData | undefined, id: number) => (data?.units || []).find((u) => u.id === id) || null;
 
+/* The host's share: entered on the deal; legacy deals (none entered) treat the
+   booking's whole commission as the host's. Platform commission is the rest. */
+export const hostShareOf = (deal: HostDeal, cells: any[]) =>
+  deal.host_share !== null && deal.host_share !== undefined ? num0(deal.host_share) : num0(cells[10]);
+export const platformCommOf = (deal: HostDeal | null, cells: any[]) =>
+  Math.max(0, num0(cells[10]) - (deal ? hostShareOf(deal, cells) : 0));
+
 /* What one deal leaves owing. + = host owes us. Settled history counts 0. */
 export function dealAmount(deal: HostDeal, cells: any[]): number {
   if (deal.settled) return 0;
-  return deal.collected_by === 'us' ? -Math.abs(num0(cells[10])) : num0(cells[9]);
+  return deal.collected_by === 'us' ? -Math.abs(hostShareOf(deal, cells)) : num0(cells[9]);
 }
 
 export function hostLedger(hostId: number, data: HostsData | undefined, rows: { r: number; cells: any[] }[]) {
