@@ -268,7 +268,7 @@ export default function BookingForm() {
     }
     setSaving(true);
     try {
-      let res;
+      let res: any;
       if (s.editB) {
         res = await api.updateBooking(s.pin, s.editB.row, { ...d, bookingId: s.editB.bookingId });
       } else {
@@ -276,10 +276,10 @@ export default function BookingForm() {
         /* Guest IDs picked before the booking existed go up now. */
         const slots = Object.keys(staged) as IdSlot[];
         if (slots.length && res?.row) {
-          let failed = 0;
-          for (const k of slots) {
-            try { await api.uploadAttachment(s.pin, res.row, k, staged[k]!); } catch { failed++; }
-          }
+          /* All at once, not one after another: four ID photos used to take
+             four upload times. */
+          const done = await Promise.allSettled(slots.map((k) => api.uploadAttachment(s.pin, res.row, k, staged[k]!)));
+          const failed = done.filter((x) => x.status === 'rejected').length;
           if (failed) toast(`Booking saved, but ${failed} ID upload${failed > 1 ? 's' : ''} failed — reopen it to retry`, false);
         }
       }
@@ -292,10 +292,8 @@ export default function BookingForm() {
           if (staged[to as IdSlot]) continue;
           (byRow[c.fromRow] = byRow[c.fromRow] || []).push([c.fromFront, to], [c.fromFront + '-back', to + '-back']);
         }
-        for (const [from, pairs] of Object.entries(byRow)) {
-          try { await api.copyGuestIds(s.pin, target, Number(from), pairs); }
-          catch { toast('Booking saved, but past IDs could not be copied — upload them from the booking', false); }
-        }
+        const copies = await Promise.allSettled(Object.entries(byRow).map(([from, pairs]) => api.copyGuestIds(s.pin, target, Number(from), pairs)));
+        if (copies.some((x) => x.status === 'rejected')) toast('Booking saved, but past IDs could not be copied — upload them from the booking', false);
       }
       toast(res?.message || 'Saved', true);
       /* A new record that became a request has nowhere to be seen yet —
@@ -303,7 +301,10 @@ export default function BookingForm() {
       if (!s.editB && res?.pendingApproval && res?.ticket) s.setLastSubmit(res.ticket);
       const from = s.editB?.from;
       reset();
-      await s.refreshWrite();
+      /* The booking is saved — free the form now. The refresh runs behind
+         it (the "Updating…" pill shows while it does) instead of holding the
+         Save button for a full reload of every booking. */
+      s.refreshWrite();
       if (from) s.setLogSeg(from);   // log sits below the form now — no navigation needed
     } catch (e: any) {
       toast(e?.message || 'Save failed', false);

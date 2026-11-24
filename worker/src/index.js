@@ -147,7 +147,7 @@ class ApiError extends Error {}
 function bad(msg) { throw new ApiError(msg); }
 
 /* ─────────────── router ─────────────── */
-export default {
+const worker = {
   /* Cron trigger (wrangler.toml [triggers]) — pushes a full snapshot to the
      Google Sheet so it stays usable as a read-only view. One-way by design. */
   async scheduled(event, env, ctx) {
@@ -159,7 +159,22 @@ export default {
     })());
   },
 
-  async fetch(request, env) {
+  /* One timing line per request — the action name, status and milliseconds,
+     never the URL (it carries the PIN). Read in Cloudflare's Observability
+     view to see which actions are slow. */
+  async fetch(request, env, ctx) {
+    const t0 = Date.now();
+    let action = '';
+    try { action = new URL(request.url).searchParams.get('action') || ''; } catch {}
+    const res = await worker.handle(request, env, ctx);
+    const ms = Date.now() - t0;
+    let size = '';
+    try { size = res.headers.get('Content-Length') || ''; } catch {}
+    console.log(JSON.stringify({ t: 'req', action: action.slice(0, 40), status: res.status, ms, size, method: request.method }));
+    return res;
+  },
+
+  async handle(request, env) {
     const url = new URL(request.url);
     const p = Object.fromEntries(url.searchParams);
 
@@ -341,6 +356,7 @@ export default {
     }
   }
 };
+export default worker;
 
 function corsHeaders() {
   return {
@@ -832,10 +848,11 @@ async function addBooking(env, pin, d) {
   if (!d.property) bad('Property is required');
   const f = bookingFields(d);
   /* Resolved and frozen here, never at read time — see the 0008 migration. */
-  Object.assign(f, await splitFor(env, f));
-  f.booking_id = await nextBookingId(env);
   const extra = checklistExtraOf(d);   // validated before the insert, so a bad step cannot half-save a booking
-  const deal = await checkHostDeal(env, d.hostDeal);
+  /* Three independent lookups, read together rather than one after another. */
+  const [split, nextId, deal] = await Promise.all([splitFor(env, f), nextBookingId(env), checkHostDeal(env, d.hostDeal)]);
+  Object.assign(f, split);
+  f.booking_id = nextId;
   const cols = Object.keys(f);
   const r = await env.DB.prepare(
     `INSERT INTO bookings (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`
@@ -860,9 +877,9 @@ async function updateBooking(env, pin, row, d) {
   const f = bookingFields(mergeWithStored(BOOKING_FROM_ROW, existing, d));
   /* Recomputed on every edit: changing the stay unit, the property or the net
      is exactly when the attribution has to move with it. */
-  Object.assign(f, await splitFor(env, f));
+  const [split, deal] = await Promise.all([splitFor(env, f), checkHostDeal(env, d.hostDeal)]);
+  Object.assign(f, split);
   f.booking_id = d.bookingId || existing.booking_id;
-  const deal = await checkHostDeal(env, d.hostDeal);
   const cols = Object.keys(f);
   await env.DB.prepare(
     `UPDATE bookings SET ${cols.map(c => `${c} = ?`).join(', ')} WHERE id = ?`

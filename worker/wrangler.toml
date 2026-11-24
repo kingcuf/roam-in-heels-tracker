@@ -41,3 +41,13 @@ crons = ["30 0 * * *"]
 # request makes several queries, so being close to the data wins.
 [placement]
 mode = "smart"
+
+# Our own per-request timing lines (action + ms, no URL, no PIN). Cloudflare's
+# automatic invocation logs stay OFF: they record the full URL, which carries
+# the PIN.
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[observability.logs]
+invocation_logs = false

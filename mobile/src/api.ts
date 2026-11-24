@@ -215,8 +215,16 @@ export const api = {
     fd.append('row', String(row));
     fd.append('slot', slot);
     if (Platform.OS === 'web') {
-      // Browsers need a real Blob; the {uri,name,type} object below is RN-only.
-      fd.append('file', await (await fetch(file.uri)).blob(), file.name);
+      /* Browsers need a real Blob; the {uri,name,type} object below is RN-only.
+         A photo picked in a browser arrives as the camera original (4–8 MB);
+         2000 px JPEG keeps every line of an ID card legible at a tenth of
+         the size. PDFs, and anything the browser cannot decode (HEIC on
+         Chrome), go up untouched. */
+      let blob: Blob | null = null, name = file.name;
+      if (/^image\//.test(file.mimeType || '') && !/heic|heif/i.test(file.mimeType)) {
+        try { blob = await fitJpeg(file.uri, 2000); name = (file.name || 'id').replace(/\.[^.]+$/, '') + '.jpg'; } catch { blob = null; }
+      }
+      fd.append('file', blob || await (await fetch(file.uri)).blob(), name);
     } else {
       // RN's FormData takes this shape for file parts; the cast keeps TS happy.
       fd.append('file', { uri: file.uri, name: file.name, type: file.mimeType } as any);
