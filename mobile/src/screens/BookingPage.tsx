@@ -317,7 +317,7 @@ function Details({ row, c, b, stayProp, split, unit }: {
         <Row label="Booked on" value={ciParse(b.bookedOn) ? ciFmtDay(ciParse(b.bookedOn) as Date) + ' ' + (ciParse(b.bookedOn) as Date).getFullYear() : ''} />
         <Row label="Channel" value={b.channel} />
         <Row label="Type" value={b.type} />
-        {b.referrer ? <Row label={b.type === 'Resold' ? 'Resold to' : 'Source'} value={b.referrer} /> : null}
+        {b.referrer ? <Row label={b.type === 'Resold' ? 'Resold to' : b.type === 'Pass' ? 'Passed to' : 'Source'} value={b.referrer} /> : null}
         <Row label="Review" value={REVIEW_LABEL[review]} tone={review === 'received' ? C.green : review === 'pending' ? C.muted : undefined} />
       </Section>
 

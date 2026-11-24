@@ -23,7 +23,7 @@ const fmtKey = (k: string) => (k ? Number(k.slice(8, 10)) + ' ' + MON3[Number(k.
 const CHANNELS = ['Airbnb', 'Booking.com', 'MMT', 'Agoda', 'From host', 'Direct/Referral'];
 
 /* Field names as the person reads them, for "Still needed: …". */
-const LABEL: Record<string, string> = { property: 'Property', date: 'Booking date', net: 'Net earned' };
+const LABEL: Record<string, string> = { property: 'Property', date: 'Booking date', net: 'Net earned', referrer: 'Passed to' };
 
 const EMPTY = {
   property: '', date: '', guest: '', leadBirthYr: '', type: 'Stay', channel: 'Airbnb',
@@ -243,6 +243,9 @@ export default function BookingForm() {
     const e: Errs = {};
     if (!d.property) e.property = 'Pick the property this booking is for.';
     if (!d.date) e.date = 'Pick the booking date.';
+    /* A new Pass needs its host, or nobody owes anybody on the ledger. Older
+       Pass rows saved before this was asked can still be edited without one. */
+    if (f.type === 'Pass' && !deal && !s.editB) e.referrer = 'Pick the host you passed this guest to.';
     /* Negative is allowed (a loss), but a lone '-' from the ± button is not a
        number — the API's num() would silently coerce it to 0. */
     if (d.net === '') e.net = 'Enter what you keep from this booking.';
@@ -256,7 +259,7 @@ export default function BookingForm() {
          Booking date are in card 1, but Net earned is in the Money card near
          the foot, and going to the top for that one put the red outline two
          screens away from the bar naming it. */
-      revealCard(e.property || e.date ? 'booking' : 'money', true);
+      revealCard(e.property || e.date || e.referrer ? 'booking' : 'money', true);
       return;
     }
     setSaving(true);
@@ -380,7 +383,10 @@ export default function BookingForm() {
      guest, our flat); a host flat picked under Stay alone is dropped. */
   /* A host chosen in the Booking card — "Resold to" or "Came from: From host".
      Choosing our flat under Stay keeps them (their guest, our flat). */
-  const hostInBooking = f.type !== 'Pass' && (f.type === 'Resold' || f.channel === 'From host');
+  /* Resold and Pass both hand the guest to a host: that host is asked for
+     right in the Booking card, so the money lands on their ledger. */
+  const toHost = f.type === 'Resold' || f.type === 'Pass';
+  const hostInBooking = toHost || f.channel === 'From host';
   const toOurUnit = () => {
     setPartner(false);
     if (deal && deal.unitId) setDeal(hostInBooking ? { ...deal, unitId: 0 } : null);
@@ -399,22 +405,22 @@ export default function BookingForm() {
               <View style={[st.picked, { marginTop: -4 }]}>
                 <Text style={st.pickedT}>{dealHost.name}</Text>
                 <Text style={st.pickedS}>{dealHost.phone || 'No mobile saved'}</Text>
-                <TouchableOpacity onPress={() => { setDeal(null); if (f.type === 'Resold') set('referrer')(''); if (dealUnit) { set('stayUnit')(''); setPartner(false); } }} hitSlop={8} style={st.pickedX}><Text style={st.link}>Change</Text></TouchableOpacity>
+                <TouchableOpacity onPress={() => { setDeal(null); if (toHost) set('referrer')(''); if (dealUnit) { set('stayUnit')(''); setPartner(false); } }} hitSlop={8} style={st.pickedX}><Text style={st.link}>Change</Text></TouchableOpacity>
               </View>
             ) : (
-              <FromHostPick data={hostsData} askUnit={f.type !== 'Stay'} resold={f.type === 'Resold'} onPick={(h) => {
+              <FromHostPick data={hostsData} askUnit={f.type !== 'Stay'} resold={toHost} onPick={(h) => {
                 const us = hostUnitsOf(h.id);
-                if (f.type === 'Resold') set('referrer')(h.name);
+                if (toHost) set('referrer')(h.name);
                 /* A Stay is in our flat — never auto-pick the host's unit for it. */
                 if (f.type !== 'Stay' && us.length === 1) pickHostUnit(us[0]);
                 else {
                   setDeal({ hostId: h.id, unitId: 0, collectedBy: defaultCollector(f.channel) });
                   /* Resold: the guest sleeps in one of their flats — open that choice under Stay. */
-                  if (f.type === 'Resold' && us.length) { setPartner(true); set('stayUnit')(''); }
+                  if (toHost && us.length) { setPartner(true); set('stayUnit')(''); }
                 }
               }} onCreated={async (hostId, unitId, unit, name) => {
                 await s.reloadLogs();
-                if (f.type === 'Resold') set('referrer')(name);
+                if (toHost) set('referrer')(name);
                 setDeal({ hostId, unitId, collectedBy: defaultCollector(f.channel) });
                 if (unitId) { set('stayUnit')(unit); setPartner(false); }
               }} />
@@ -566,8 +572,9 @@ export default function BookingForm() {
           </Field>
           {/* The same column means different things by booking type, so the
               label follows the type instead of staying vague. */}
-          {f.type === 'Resold' ? (
-            <Field label="Resold to" hint="The host whose flat your guest gets.">
+          {toHost ? (
+            <Field label={f.type === 'Pass' ? 'Passed to' : 'Resold to'} req={f.type === 'Pass'} err={errs.referrer}
+              hint={f.type === 'Pass' ? 'The host you sent this guest to — what they owe you goes on their ledger.' : 'The host whose flat your guest gets.'}>
               {hostBlock}
               {/* A pre-ledger "Resold to" name with no host linked yet. */}
               {!deal && f.referrer ? <Text style={st.hitNote}>{'Saved as “' + f.referrer + '” — pick or add the host to track the money.'}</Text> : null}

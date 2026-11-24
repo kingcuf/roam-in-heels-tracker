@@ -11,7 +11,7 @@ import {
 } from '../logic';
 import { unitNo } from '../propertyPicker';
 import { coverFor } from '../unitCovers';
-import Svg, { Path } from 'react-native-svg';
+import Svg, { Circle, Path } from 'react-native-svg';
 import TaskForm from './TaskForm';
 
 /* The Action tab: the property manager's morning screen.
@@ -40,7 +40,7 @@ const TONE: Record<SectionKey, Tone> = {
   up: { ink: C.sky, bg: C.skybg },
   rev: { ink: G.gold2, bg: C.amberbg },
   ids: { ink: C.red, bg: C.redbg },
-  pay: { ink: C.red, bg: C.redbg },
+  pay: { ink: G.gold3, bg: C.amberbg },
   low: { ink: C.amber, bg: C.amberbg },
   act: { ink: C.navy, bg: C.bone },
   enq: { ink: C.blue2, bg: C.amberbg },
@@ -152,7 +152,8 @@ export default function ActionScreen() {
   const tasks = useMemo(() => computeTasks(s.logs?.tasks || null), [s.logs]);
   const enq = useMemo(() => computeEnquiries(s.logs?.enquiries, prop), [s.logs, prop]);
   const tk = todayIso();
-  const inHouse = useMemo(() => computeStays(b, prop).stays.filter((x) => x.inK < tk && x.outK > tk).length, [b, prop, tk]);
+  const stayList = useMemo(() => computeStays(b, prop).stays, [b, prop]);
+  const inHouse = stayList.filter((x) => x.inK < tk && x.outK > tk).length;
   /* IDs sorted by who arrives first: a missing ID for tonight is urgent, one
      for next month is not. */
   const idsSorted = useMemo(() => [...ids].sort((a, c) => (a.ci ? a.ci.getTime() : 9e15) - (c.ci ? c.ci.getTime() : 9e15)), [ids]);
@@ -174,7 +175,7 @@ export default function ActionScreen() {
   /* Payments by platform: Airbnb pays out on its own schedule, Booking.com on
      another, a host settles in cash. Each is chased (and marked paid) apart. */
   const payGroups = useMemo(() => {
-    const m: Record<string, { label: string; fg: string; bg: string; items: typeof pay.list; total: number }> = {};
+    const m: Record<string, { key: string; label: string; fg: string; bg: string; items: typeof pay.list; total: number }> = {};
     pay.list.forEach((p) => {
       const pl = platformOf(p.card.channel) || { ...PLATFORM.direct, label: 'No platform' };
       const g = m[pl.label] || (m[pl.label] = { ...pl, items: [], total: 0 });
@@ -289,20 +290,23 @@ export default function ActionScreen() {
 
         {page === 'pay' ? (
           <View style={st.sumBar}>
-            <Text style={st.sumLbl}>{payCh === 'All' ? 'STILL TO COLLECT' : 'TO COLLECT FROM ' + payCh.toUpperCase()}</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={st.sumLbl}>{payCh === 'All' ? 'To collect' : 'To collect from ' + payCh}</Text>
+              <Text style={st.sumSub}>{payShown.length} booking{payShown.length === 1 ? '' : 's'}{payCh === 'All' && payGroups.length > 1 ? ' · ' + payGroups.length + ' platforms' : ''}</Text>
+            </View>
             <Text style={st.sumVal}>{inr(payCh === 'All' ? pay.total : payShownTotal)}</Text>
           </View>
         ) : null}
         {page === 'pay' && payGroups.length > 1 ? (
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={st.chRow}>
-            {[{ label: 'All', fg: C.ink, bg: '#fff', items: pay.list, total: pay.total }, ...payGroups].map((g) => {
+            {[{ key: 'all', label: 'All', fg: C.ink, bg: '#fff', items: pay.list, total: pay.total }, ...payGroups].map((g) => {
               const on = g.label === payCh;
               return (
                 <TouchableOpacity key={g.label} onPress={() => setPayCh(g.label)} activeOpacity={0.8}
                   style={[st.chTile, on && { borderColor: g.label === 'All' ? C.navy : g.fg, backgroundColor: g.label === 'All' ? '#fff' : g.bg }]}>
                   <View style={st.chHead}>
-                    {g.label !== 'All' ? <View style={[st.platDot, { backgroundColor: g.fg }]} /> : null}
-                    <Text style={[st.chName, { color: g.label === 'All' ? C.ink : g.fg }]} numberOfLines={1}>{g.label === 'All' ? 'All platforms' : g.label}</Text>
+                    <PlatLogo k={g.key} size={20} />
+                    <Text style={[st.chName, { color: C.ink }]} numberOfLines={1}>{g.label === 'All' ? 'All platforms' : g.label}</Text>
                   </View>
                   <Text style={st.chAmt}>{inr(g.total)}</Text>
                   <Text style={st.chN}>{g.items.length} booking{g.items.length === 1 ? '' : 's'}</Text>
@@ -402,13 +406,14 @@ export default function ActionScreen() {
           {page === 'pay' && (payCh === 'All' ? payGroups : payGroups.filter((g) => g.label === payCh)).map((g) => (
             <View key={g.label}>
               <View style={st.grpRow}>
-                <View style={[st.platDot, { backgroundColor: g.fg, width: 8, height: 8, borderRadius: 4 }]} />
-                <Text style={st.grpName}>{g.label}</Text>
-                <Text style={st.grpMeta}>{g.items.length} · {inr(g.total)}</Text>
-                <View style={{ flex: 1 }} />
+                <PlatLogo k={g.key} size={34} />
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={st.grpName} numberOfLines={1}>{g.label}</Text>
+                  <Text style={st.grpMeta} numberOfLines={1}>{g.items.length} booking{g.items.length === 1 ? '' : 's'} · <Text style={st.grpAmt}>{inr(g.total)}</Text></Text>
+                </View>
                 {manage && payCh === 'All' && selectable(g.items).length ? (
-                  <TouchableOpacity onPress={() => toggleAll(g.items)} hitSlop={8}>
-                    <Text style={st.grpLink}>{allOn(g.items) ? 'Clear' : 'Select ' + g.label}</Text>
+                  <TouchableOpacity onPress={() => toggleAll(g.items)} hitSlop={8} style={[st.grpBtn, allOn(g.items) && st.grpBtnOn]}>
+                    <Text style={[st.grpLink, allOn(g.items) && { color: '#fff' }]}>{allOn(g.items) ? '✓ Selected' : 'Select all'}</Text>
                   </TouchableOpacity>
                 ) : null}
               </View>
@@ -483,28 +488,45 @@ export default function ActionScreen() {
   const mine = s.myLive;
   const sentBack = mine.filter((t) => t.status === 'open').length;
 
-  /* Today's movements, in time order: the door list. */
-  const moves = [
-    ...ci.today.map((x) => ({ x, kind: 'in' as const, t: x.card.inT })),
-    ...ci.checkoutsToday.map((x) => ({ x, kind: 'out' as const, t: x.card.outT })),
-  ].sort((a, c) => mins(a.t) - mins(c.t) || (a.kind === 'out' ? -1 : 1));
-  const MOVES_SHOWN = 5;
-
-  /* Needs you: urgency order, one line each. Empty queues stay out. */
-  const outNow = low.filter((i) => i.outNow).length;
-  const needs: { key: string; n: number; title: string; sub: string; tone: Tone; onPress: () => void }[] = [];
-  if (waiting.length) needs.push({ key: 'apr', n: waiting.length, title: waiting.length === 1 ? 'Approval needed' : 'Approvals needed', sub: waiting[0].label + (waiting[0].requester ? ' · from ' + waiting[0].requester : ''), tone: { ink: G.gold3, bg: C.amberbg }, onPress: s.openApprovals });
-  if (mine.length) needs.push({ key: 'mine', n: mine.length, title: sentBack ? 'Sent back to you' : 'Your requests', sub: sentBack ? sentBack + ' need your fix' : 'Waiting for approval · ' + mine[0].label, tone: { ink: C.amber, bg: C.amberbg }, onPress: () => s.openMyRequests() });
-  if (count.ids) needs.push({ key: 'ids', n: count.ids, title: TITLE.ids, sub: idsSoon ? idsSoon + ' guest' + (idsSoon === 1 ? '' : 's') + ' arriving within 2 days' : nameOf(idsSorted[0]) + ' · ' + (idsSorted[0].ci ? 'arrives ' + relDay(idsSorted[0].ci) : 'no date'), tone: TONE.ids, onPress: () => setPage('ids') });
-  if (count.pay) needs.push({ key: 'pay', n: count.pay, title: TITLE.pay, sub: inr(pay.total) + ' still to collect', tone: TONE.pay, onPress: () => setPage('pay') });
-  if (count.enq) needs.push({ key: 'enq', n: count.enq, title: 'New enquiries', sub: enq.fresh[0].name + (enq.fresh[0].property ? ' · ' + enq.fresh[0].property : ''), tone: TONE.enq, onPress: () => setPage('enq') });
-  if (count.rev) needs.push({ key: 'rev', n: count.rev, title: TITLE.rev, sub: rev.filter((x) => x.status !== 'requested').length + ' not asked yet · ' + rev.filter((x) => x.status === 'requested').length + ' waiting', tone: TONE.rev, onPress: () => setPage('rev') });
-  if (count.low) needs.push({ key: 'low', n: count.low, title: TITLE.low, sub: outNow ? outNow + ' out of stock' : low[0].item + ' running low', tone: TONE.low, onPress: () => setPage('low') });
-  if (count.act) needs.push({ key: 'act', n: count.act, title: 'To-dos due', sub: tasks.due[0].name, tone: TONE.act, onPress: () => setPage('act') });
-
-  const soon = ci.upcoming.filter((x) => { const n = daysFromToday(x.date); return n !== null && n <= 7; });
+  /* ── Home: the operator's board ──────────────────────────────────────
+     Four containers, in the order a host's day runs: TODAY (the door),
+     MONEY (what's owed), GUESTS (paperwork and follow-ups), PROPERTY
+     (supplies and jobs). Every tile is a queue with its count, one fact you'd
+     act on, and one warning line when something is at risk. Empty queues
+     stay on the board as "all done" so the layout never jumps around. */
   const now = new Date();
   const hello = now.getHours() < 12 ? 'Good morning' : now.getHours() < 17 ? 'Good afternoon' : 'Good evening';
+  const outNow = low.filter((i) => i.outNow).length;
+  const byTime = (k: 'in' | 'out') => (a: CiItem, c: CiItem) => mins(k === 'in' ? a.card.inT : a.card.outT) - mins(k === 'in' ? c.card.inT : c.card.outT);
+  const arr = [...ci.today].sort(byTime('in'));
+  const dep = [...ci.checkoutsToday].sort(byTime('out'));
+  const arrNoId = arr.filter((x) => idByRow[x.row]).length;
+  const depDue = dep.reduce((t, x) => t + (x.card.pending > 0 ? x.card.pending : 0), 0);
+  const soon = ci.upcoming.filter((x) => { const n = daysFromToday(x.date); return n !== null && n >= 1 && n <= 7; });
+  const soonNoId = soon.filter((x) => idByRow[x.row]).length;
+  const firstName = (x: CiItem) => String(nameOf(x)).split(' ')[0];
+
+  /* Tonight: which of our flats has someone sleeping in it. */
+  const ownUnits = (prop === 'All' ? s.props.map((pp) => pp.name) : [prop]).map((n) => unitNo(n) || n);
+  const tonight = new Set<string>();
+  stayList.forEach((x) => {
+    if (!(x.inK <= tk && x.outK > tk)) return;
+    const own = unitNo(x.prop) || x.prop, tail = unitNumberOf(x.prop);
+    const us = String(x.unit ?? '').split(/[,/]/).map((v) => v.trim()).filter(Boolean).map((v) => (v === x.prop || (tail && v === tail) ? own : v));
+    (us.length ? us : [own]).forEach((u) => tonight.add(u));
+  });
+  const booked = ownUnits.filter((u) => tonight.has(u));
+  const free = ownUnits.filter((u) => !tonight.has(u));
+
+  /* Money: by platform, and how much is owed by guests who have already left. */
+  const gone = pay.list.filter((p) => { const n = daysFromToday(p.card.outD); return n !== null && n < 0; });
+  const goneAmt = gone.reduce((t, p) => t + p.pending, 0);
+  const revAsk = rev.filter((x) => x.status !== 'requested').length;
+
+  const lede = [
+    arr.length || dep.length ? arr.length + ' in · ' + dep.length + ' out today' : 'No check-ins or check-outs today',
+    ownUnits.length ? booked.length + ' of ' + ownUnits.length + ' booked tonight' : '',
+  ].filter(Boolean).join('  ·  ');
 
   return (
     <View style={{ flex: 1 }}>
@@ -523,110 +545,86 @@ export default function ActionScreen() {
         ) : null}
 
         <Text style={st.hello}>{hello}</Text>
-        <Text style={st.lede}>
-          {needs.length + (moves.length ? 1 : 0) === 0 ? 'All clear. Nothing needs you right now.'
-            : [moves.length ? moves.length + ' movement' + (moves.length === 1 ? '' : 's') + ' today' : '', needs.length ? needs.length + ' queue' + (needs.length === 1 ? '' : 's') + ' need you' : ''].filter(Boolean).join(' · ')}
-        </Text>
+        <Text style={st.lede}>{lede}</Text>
 
-        {/* ── Today ── */}
-        <View style={st.todayCard}>
-          <View style={st.todayHead}>
-            <View style={{ flex: 1 }}>
-              <Text style={st.kick}>TODAY</Text>
-              <Text style={st.todayDate}>{WD[now.getDay()]}, {ciFmtDay(now)}</Text>
-            </View>
-            <TouchableOpacity onPress={() => s.setTab('cal')} hitSlop={8}><Text style={st.headLink}>Calendar ›</Text></TouchableOpacity>
-          </View>
-          <View style={st.stats}>
-            <Stat n={count.ci} label="Arriving" ink={C.green} onPress={() => setPage('ci')} />
-            <Stat n={count.co} label="Leaving" ink={G.gold3} onPress={() => setPage('co')} />
-            <Stat n={inHouse} label="Staying on" ink={C.sky} onPress={() => s.setTab('cal')} />
-          </View>
-          {moves.length ? (
-            <View style={{ marginTop: 6 }}>
-              {moves.slice(0, MOVES_SHOWN).map(({ x, kind, t }, i) => {
-                const idx = idByRow[x.row];
-                return (
-                  <TouchableOpacity key={kind + x.row} style={[st.move, i === 0 && { borderTopWidth: 0 }]} onPress={() => openBooking(x.row)} activeOpacity={0.7}>
-                    <View style={st.moveTime}>
-                      <Text style={[st.moveKind, { color: kind === 'in' ? C.green : G.gold3 }]}>{kind === 'in' ? 'IN' : 'OUT'}</Text>
-                      <Text style={[st.moveT, !t && { color: C.muted }]}>{t || '—'}</Text>
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={st.moveName} numberOfLines={1}>{nameOf(x)}</Text>
-                      <View style={st.subRow}><Platform ch={x.card.channel} small /><Text style={st.moveSub} numberOfLines={1}>Unit {unitOf(x.card)}{x.card.guests ? ' · ' + x.card.guests + ' guest' + (x.card.guests === 1 ? '' : 's') : ''}</Text></View>
-                    </View>
-                    {kind === 'in' && idx ? <Tag text="No ID" tone="bad" /> : null}
-                    {x.card.pending > 0 ? <Tag text={inr(x.card.pending)} tone="bad" /> : null}
-                    <Text style={st.chev}>›</Text>
-                  </TouchableOpacity>
-                );
-              })}
-              {moves.length > MOVES_SHOWN ? (
-                <TouchableOpacity onPress={() => setPage(count.ci >= count.co ? 'ci' : 'co')} style={st.moreBtn}>
-                  <Text style={st.headLink}>+{moves.length - MOVES_SHOWN} more today</Text>
-                </TouchableOpacity>
-              ) : null}
-            </View>
-          ) : <Text style={st.quiet}>No arrivals or departures today.</Text>}
+        {/* Decisions waiting on you come before everything else. */}
+        {waiting.length ? (
+          <Banner title={waiting.length + (waiting.length === 1 ? ' approval needs you' : ' approvals need you')}
+            sub={waiting[0].label + (waiting[0].requester ? ' · from ' + waiting[0].requester : '')} onPress={s.openApprovals} />
+        ) : null}
+        {mine.length ? (
+          <Banner title={sentBack ? sentBack + ' request' + (sentBack === 1 ? '' : 's') + ' sent back to you' : mine.length + ' of your requests waiting'}
+            sub={sentBack ? 'Fix and send again' : 'Waiting for approval · ' + mine[0].label} onPress={() => s.openMyRequests()} soft={!sentBack} />
+        ) : null}
+
+        {/* ── TODAY ── */}
+        <Group first title="Today" sub={WD[now.getDay()] + ', ' + ciFmtDay(now)} link="Calendar ›" onLink={() => s.setTab('cal')} />
+        <View style={st.grid}>
+          <Tile icon="in" tint={C.green} title="Check-ins" n={arr.length} onPress={() => setPage('ci')}
+            line={arr.length ? 'First ' + firstName(arr[0]) + (arr[0].card.inT ? ' · ' + arr[0].card.inT : '') : 'Nobody arriving'}
+            alert={arr.length ? (arrNoId ? { t: arrNoId + ' without ID', tone: 'bad' } : { t: 'All IDs in', tone: 'ok' }) : null} />
+          <Tile icon="out" tint={G.gold3} title="Check-outs" n={dep.length} onPress={() => setPage('co')}
+            line={dep.length ? 'First ' + firstName(dep[0]) + (dep[0].card.outT ? ' · ' + dep[0].card.outT : '') : 'Nobody leaving'}
+            alert={dep.length ? (depDue ? { t: inr(depDue) + ' unpaid', tone: 'warn' } : { t: 'All settled', tone: 'ok' }) : null} />
+          <Tile icon="bed" tint={C.sky} title="Tonight" n={booked.length} of={ownUnits.length} onPress={() => s.setTab('cal')}
+            line={inHouse ? inHouse + ' staying on from earlier' : 'Units booked'}
+            alert={ownUnits.length ? (free.length ? { t: 'Free: ' + free.join(', '), tone: 'warn' } : { t: 'Fully booked', tone: 'ok' }) : null} />
+          <Tile icon="cal" tint={C.navy} title="Next 7 days" n={soon.length} onPress={() => setPage('up')} disabled={!ci.upcoming.length}
+            line={soon.length ? 'Next ' + firstName(soon[0]) + ' · ' + relDay(soon[0].date) : ci.upcoming.length ? ci.upcoming.length + ' later on' : 'No arrivals booked'}
+            alert={soon.length && soonNoId ? { t: soonNoId + ' need ID', tone: 'bad' } : null} />
         </View>
 
-        {/* ── Needs you ── */}
-        {needs.length ? (
-          <>
-            <Text style={st.section}>Needs you</Text>
-            <View style={st.listCard}>
-              {needs.map((r, i) => (
-                <TouchableOpacity key={r.key} style={[st.need, i === needs.length - 1 && { borderBottomWidth: 0 }]} onPress={r.onPress} activeOpacity={0.7}>
-                  <View style={[st.needN, { backgroundColor: r.tone.bg }]}>
-                    <Text style={[st.needNTxt, { color: r.tone.ink }]} numberOfLines={1} adjustsFontSizeToFit>{r.n}</Text>
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={st.needTitle}>{r.title}</Text>
-                    <Text style={st.needSub} numberOfLines={1}>{r.sub}</Text>
-                  </View>
-                  <Text style={st.chev}>›</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </>
-        ) : (
-          <View style={st.clear}>
-            <Text style={st.clearMark}>✓</Text>
-            <Text style={st.clearTitle}>Nothing waiting on you</Text>
-            <Text style={st.clearSub}>IDs, payments, reviews, enquiries and stock are all up to date{prop !== 'All' ? ' for ' + prop : ''}.</Text>
+        {/* ── MONEY ── */}
+        <Group title="Money" />
+        <TouchableOpacity style={st.moneyTile} activeOpacity={0.8} onPress={() => setPage('pay')} disabled={!pay.list.length}>
+          <View style={st.tileHead}>
+            <TileIcon k="rupee" tint={G.gold3} />
+            <Text style={st.tileTitle}>Payments to collect</Text>
+            <View style={{ flex: 1 }} />
+            {pay.list.length ? <Text style={st.chev}>›</Text> : null}
           </View>
-        )}
+          {pay.list.length ? (
+            <>
+              <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 8 }}>
+                <Text style={st.moneyBig}>{inr(pay.total)}</Text>
+                <Text style={st.tileLine}>from {pay.list.length} booking{pay.list.length === 1 ? '' : 's'}</Text>
+              </View>
+              <View style={st.platRow}>
+                {payGroups.map((g) => (
+                  <View key={g.label} style={st.platCell}>
+                    <PlatLogo k={g.key} size={18} />
+                    <Text style={st.platCellAmt} numberOfLines={1}>{inr(g.total)}</Text>
+                  </View>
+                ))}
+              </View>
+              {goneAmt ? <AlertLine t={inr(goneAmt) + ' from ' + gone.length + ' guest' + (gone.length === 1 ? '' : 's') + ' who already checked out'} tone="bad" /> : null}
+            </>
+          ) : <AlertLine t="Everything collected" tone="ok" />}
+        </TouchableOpacity>
 
-        {/* ── Coming up ── */}
-        <View style={st.sectionRow}>
-          <Text style={[st.section, { flex: 1, marginTop: 0, marginBottom: 0 }]}>Coming up</Text>
-          {ci.upcoming.length ? <TouchableOpacity onPress={() => setPage('up')} hitSlop={8}><Text style={st.headLink}>All {ci.upcoming.length} ›</Text></TouchableOpacity> : null}
+        {/* ── GUESTS ── */}
+        <Group title="Guests" />
+        <View style={st.grid}>
+          <Tile icon="id" tint={C.red} title="IDs missing" n={count.ids} onPress={() => setPage('ids')} disabled={!count.ids}
+            line={count.ids ? count.ids + ' booking' + (count.ids === 1 ? '' : 's') + ' incomplete' : 'All documents in'}
+            alert={idsSoon ? { t: idsSoon + ' arriving in 2 days', tone: 'bad' } : null} />
+          <Tile icon="star" tint={G.gold2} title="Reviews" n={count.rev} onPress={() => setPage('rev')} disabled={!count.rev}
+            line={count.rev ? revAsk + ' to ask · ' + (count.rev - revAsk) + ' waiting' : 'No one to follow up'}
+            alert={null} />
+          <Tile icon="mail" tint={C.blue2} title="Enquiries" n={count.enq} onPress={() => setPage('enq')} disabled={!enq.all.length}
+            line={count.enq ? enq.fresh[0].name + (enq.fresh[0].property ? ' · ' + enq.fresh[0].property : '') : enq.all.length ? enq.all.length + ' handled' : 'None from the website'}
+            alert={count.enq ? { t: count.enq + ' new, not contacted', tone: 'warn' } : null} />
         </View>
-        {soon.length ? (
-          <View style={st.listCard}>
-            {soon.slice(0, 5).map((x, i) => (
-              <TouchableOpacity key={'s' + x.row} style={[st.need, i === Math.min(5, soon.length) - 1 && { borderBottomWidth: 0 }]} onPress={() => openBooking(x.row)} activeOpacity={0.7}>
-                <View style={st.dateBox}>
-                  <Text style={st.dateWd}>{WD[x.date.getDay()].toUpperCase()}</Text>
-                  <Text style={st.dateD}>{x.date.getDate()}</Text>
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={st.needTitle} numberOfLines={1}>{nameOf(x)}</Text>
-                  <View style={st.subRow}><Platform ch={x.card.channel} small /><Text style={st.needSub} numberOfLines={1}>Unit {unitOf(x.card)} · {x.card.nights === null ? 'stay' : x.card.nights === 0 ? 'day use' : x.card.nights + ' night' + (x.card.nights === 1 ? '' : 's')}</Text></View>
-                </View>
-                {idByRow[x.row] ? <Tag text="No ID" tone="bad" /> : null}
-                <Text style={st.chev}>›</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        ) : <Text style={[st.quiet, { paddingHorizontal: 4 }]}>No arrivals in the next 7 days.</Text>}
 
-        {/* ── Lists you keep ── */}
-        <Text style={st.section}>Lists</Text>
-        <View style={st.listCard}>
-          <ListLink title="To-do list" sub={tasks.open.length ? tasks.open.length + ' open' + (tasks.due.length ? ' · ' + tasks.due.length + ' due' : '') : 'Nothing open'} onPress={() => setPage('act')} last={!enq.all.length} />
-          {enq.all.length ? <ListLink title="Website enquiries" sub={enq.all.length + ' total · ' + enq.fresh.length + ' new'} onPress={() => setPage('enq')} last /> : null}
+        {/* ── PROPERTY ── */}
+        <Group title="Property" />
+        <View style={st.grid}>
+          <Tile icon="box" tint={C.amber} title="Low stock" n={count.low} onPress={() => setPage('low')} disabled={!count.low}
+            line={count.low ? low[0].item + (count.low > 1 ? ' + ' + (count.low - 1) + ' more' : '') : 'Supplies OK'}
+            alert={outNow ? { t: outNow + ' out of stock', tone: 'bad' } : null} />
+          <Tile icon="check" tint={C.navy} title="To-dos" n={tasks.open.length} onPress={() => setPage('act')}
+            line={tasks.open.length ? (tasks.due[0] || tasks.open[0]).name : 'Nothing open'}
+            alert={tasks.due.length ? { t: tasks.due.length + ' due now', tone: 'warn' } : null} />
         </View>
       </ScrollView>
       {manage ? (
@@ -635,6 +633,78 @@ export default function ActionScreen() {
         </TouchableOpacity>
       ) : null}
     </View>
+  );
+}
+
+/* ── home pieces ────────────────────────────────────────────────────────── */
+type Alert = { t: string; tone: 'bad' | 'warn' | 'ok' } | null;
+const ALERT_INK = { bad: C.red, warn: G.gold3, ok: C.green };
+function AlertLine({ t, tone }: { t: string; tone: 'bad' | 'warn' | 'ok' }) {
+  return (
+    <View style={st.alert}>
+      <View style={[st.alertDot, { backgroundColor: ALERT_INK[tone] }]} />
+      <Text style={[st.alertTxt, { color: ALERT_INK[tone] }]} numberOfLines={1}>{t}</Text>
+    </View>
+  );
+}
+function Group({ title, sub, link, onLink, first }: { title: string; sub?: string; link?: string; onLink?: () => void; first?: boolean }) {
+  return (
+    <View style={[st.groupRow, first && { marginTop: 4 }]}>
+      <Text style={st.groupTitle}>{title}</Text>
+      {sub ? <Text style={st.groupSub}>{sub}</Text> : null}
+      <View style={{ flex: 1 }} />
+      {link ? <TouchableOpacity onPress={onLink} hitSlop={8}><Text style={st.headLink}>{link}</Text></TouchableOpacity> : null}
+    </View>
+  );
+}
+function Banner({ title, sub, onPress, soft }: { title: string; sub: string; onPress: () => void; soft?: boolean }) {
+  return (
+    <TouchableOpacity style={[st.banner, soft && st.bannerSoft]} onPress={onPress} activeOpacity={0.8}>
+      <View style={{ flex: 1 }}>
+        <Text style={[st.bannerT, soft && { color: C.ink }]} numberOfLines={1}>{title}</Text>
+        <Text style={[st.bannerS, soft && { color: C.muted }]} numberOfLines={1}>{sub}</Text>
+      </View>
+      <Text style={[st.chev, { color: soft ? C.muted : '#fff' }]}>›</Text>
+    </TouchableOpacity>
+  );
+}
+const ICON: Record<string, string[]> = {
+  in: ['M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4', 'M3 12h11', 'M10 8l4 4-4 4'],
+  out: ['M10 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4', 'M10 12h11', 'M17 8l4 4-4 4'],
+  bed: ['M3 18V7', 'M3 14h18v4', 'M21 14v-3a3 3 0 0 0-3-3h-7v6', 'M6.5 11.5h.01'],
+  cal: ['M4 6h16v14H4z', 'M4 10h16', 'M8 3v4', 'M16 3v4'],
+  rupee: ['M7 5h10', 'M7 9h10', 'M7 5c5 0 7 1.5 7 4s-2 4-7 4l7 6'],
+  id: ['M3 6h18v12H3z', 'M8.5 13a2 2 0 1 0 0-4 2 2 0 0 0 0 4z', 'M5.5 16c.6-1.4 1.7-2 3-2s2.4.6 3 2', 'M14 10h4', 'M14 13.5h3'],
+  star: ['M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z'],
+  mail: ['M3 6h18v12H3z', 'M3 7l9 6 9-6'],
+  box: ['M3 8l9-5 9 5v8l-9 5-9-5z', 'M3 8l9 5 9-5', 'M12 13v8'],
+  check: ['M9 6h11', 'M9 12h11', 'M9 18h11', 'M4 6l1 1 2-2', 'M4 12l1 1 2-2', 'M4 18l1 1 2-2'],
+};
+function TileIcon({ k, tint }: { k: string; tint: string }) {
+  return (
+    <View style={[st.tileIcon, { backgroundColor: tint + '18' }]}>
+      <Svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke={tint} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+        {(ICON[k] || []).map((d, i) => <Path key={i} d={d} />)}
+      </Svg>
+    </View>
+  );
+}
+function Tile({ icon, tint, title, n, of, line, alert, onPress, disabled }: {
+  icon: string; tint: string; title: string; n: number; of?: number; line: string; alert: Alert; onPress: () => void; disabled?: boolean;
+}) {
+  const zero = n === 0 && of === undefined;
+  return (
+    <TouchableOpacity style={st.tile} onPress={onPress} activeOpacity={0.8} disabled={disabled}>
+      <View style={st.tileHead}>
+        <TileIcon k={icon} tint={zero ? C.muted : tint} />
+        <Text style={st.tileTitle} numberOfLines={1}>{title}</Text>
+      </View>
+      <Text style={[st.tileN, zero && { color: C.muted }]}>
+        {n}{of !== undefined ? <Text style={st.tileOf}> / {of}</Text> : null}
+      </Text>
+      <Text style={st.tileLine} numberOfLines={1}>{line}</Text>
+      {alert ? <AlertLine t={alert.t} tone={alert.tone} /> : <View style={{ height: 18 }} />}
+    </TouchableOpacity>
   );
 }
 
@@ -753,7 +823,7 @@ function BRow({ c, pin, docId, focus, note, noteTone, flags, actions, primary, b
           {c.pending > 0 ? (
             <View style={{ alignItems: 'flex-end' }}>
               <Text style={st.cDue}>{inr(c.pending)}</Text>
-              <Text style={st.cDueLbl}>PENDING</Text>
+              <Text style={st.cDueLbl}>TO COLLECT</Text>
             </View>
           ) : c.paid > 0 ? (
             <View style={st.paidChip}><Text style={st.paidTxt}>Paid</Text></View>
@@ -842,14 +912,57 @@ function DuoAvatar({ c, pin, docId }: { c: CardData; pin: string; docId?: number
 
 /* Where the booking came from, so you know where to go and check. Plain
    coloured labels; the colours are only there to tell them apart at a glance. */
-const PLATFORM: Record<string, { label: string; fg: string; bg: string }> = {
-  airbnb: { label: 'Airbnb', fg: '#D93B4A', bg: '#FDECEE' },
-  booking: { label: 'Booking.com', fg: '#1D4F9E', bg: '#E8EFFA' },
-  agoda: { label: 'Agoda', fg: '#6A3FC4', bg: '#F0EBFB' },
-  mmt: { label: 'MMT', fg: '#C2410C', bg: '#FDEFE6' },
-  host: { label: 'From host', fg: G.gold3, bg: C.amberbg },
-  direct: { label: 'Direct', fg: '#3F4A44', bg: '#ECEFED' },
+const PLATFORM: Record<string, { key: string; label: string; fg: string; bg: string }> = {
+  airbnb: { key: 'airbnb', label: 'Airbnb', fg: '#D93B4A', bg: '#FDECEE' },
+  booking: { key: 'booking', label: 'Booking.com', fg: '#1D4F9E', bg: '#E8EFFA' },
+  agoda: { key: 'agoda', label: 'Agoda', fg: '#3A3A3A', bg: '#F1F1F1' },
+  mmt: { key: 'mmt', label: 'MMT', fg: '#C2410C', bg: '#FDEFE6' },
+  host: { key: 'host', label: 'From host', fg: G.gold3, bg: C.amberbg },
+  direct: { key: 'direct', label: 'Direct', fg: '#2F6B4F', bg: '#E6F2EB' },
 };
+/* The OTAs' own app icons (bundled, so they work offline); a house for a
+   host's guest and a handshake for a direct booking. */
+const LOGO: Record<string, any> = {
+  airbnb: require('../../assets/platforms/airbnb.png'),
+  booking: require('../../assets/platforms/booking.png'),
+  agoda: require('../../assets/platforms/agoda.png'),
+  mmt: require('../../assets/platforms/mmt.png'),
+};
+function PlatLogo({ k, size = 18 }: { k: string; size?: number }) {
+  const r = Math.round(size * 0.28);
+  if (k === 'all') {
+    return (
+      <View style={{ width: size, height: size, borderRadius: r, backgroundColor: C.navy, alignItems: 'center', justifyContent: 'center' }}>
+        <Svg width={size * 0.6} height={size * 0.6} viewBox="0 0 24 24">
+          <Circle cx={7} cy={7} r={3} fill="#fff" /><Circle cx={17} cy={7} r={3} fill="#fff" />
+          <Circle cx={7} cy={17} r={3} fill="#fff" /><Circle cx={17} cy={17} r={3} fill="#fff" />
+        </Svg>
+      </View>
+    );
+  }
+  if (LOGO[k]) {
+    return <Image source={LOGO[k]} style={{ width: size, height: size, borderRadius: r, borderWidth: k === 'agoda' || k === 'mmt' ? 1 : 0, borderColor: C.hair }} />;
+  }
+  const host = k === 'host';
+  const fg = host ? '#fff' : '#fff';
+  return (
+    <View style={{ width: size, height: size, borderRadius: r, backgroundColor: host ? G.gold2 : '#2F6B4F', alignItems: 'center', justifyContent: 'center' }}>
+      <Svg width={size * 0.62} height={size * 0.62} viewBox="0 0 24 24" fill="none" stroke={fg} strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round">
+        {host ? (
+          <>
+            <Path d="M3 11.5 12 4l9 7.5" />
+            <Path d="M5.5 10v9.5h13V10" />
+            <Path d="M10 19.5v-5h4v5" />
+          </>
+        ) : (
+          <>
+            <Path d="M12 20.5s-7.5-4.6-7.5-10A4.3 4.3 0 0 1 12 7.6a4.3 4.3 0 0 1 7.5 2.9c0 5.4-7.5 10-7.5 10Z" />
+          </>
+        )}
+      </Svg>
+    </View>
+  );
+}
 function platformOf(ch: string) {
   const v = String(ch || '').toLowerCase();
   if (v.includes('airbnb')) return PLATFORM.airbnb;
@@ -866,7 +979,7 @@ function Platform({ ch, small }: { ch: string; small?: boolean }) {
   if (!p) return null;
   return (
     <View style={[st.plat, { backgroundColor: p.bg }, small && st.platSm]}>
-      <View style={[st.platDot, { backgroundColor: p.fg }]} />
+      <PlatLogo k={p.key} size={small ? 13 : 14} />
       <Text style={[st.platTxt, { color: p.fg }, small && { fontSize: 10.5 }]} numberOfLines={1}>{p.label}</Text>
     </View>
   );
@@ -971,6 +1084,29 @@ function EnquiryRow({ e, manage, onStatus }: { e: EnquiryItem; manage: boolean; 
 }
 
 const st = StyleSheet.create({
+  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  tile: { width: '48.4%', flexGrow: 1, backgroundColor: '#fff', borderRadius: 18, borderWidth: 1, borderColor: 'rgba(90,58,20,0.10)', padding: 13 },
+  tileHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  tileIcon: { width: 30, height: 30, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  tileTitle: { fontFamily: F.bold, fontSize: 13.5, color: C.ink, flexShrink: 1 },
+  tileN: { fontFamily: F.xbold, fontSize: 30, color: C.ink, letterSpacing: -0.8, marginTop: 10, lineHeight: 34 },
+  tileOf: { fontFamily: F.bold, fontSize: 17, color: C.muted, letterSpacing: 0 },
+  tileLine: { fontFamily: F.semi, fontSize: 12, color: C.bark, marginTop: 2 },
+  alert: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6, minHeight: 12 },
+  alertDot: { width: 6, height: 6, borderRadius: 3 },
+  alertTxt: { fontFamily: F.bold, fontSize: 11.5, flexShrink: 1 },
+  groupRow: { flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 22, marginBottom: 10, paddingHorizontal: 2 },
+  groupTitle: { fontFamily: F.xbold, fontSize: 18, color: C.ink, letterSpacing: -0.3 },
+  groupSub: { fontFamily: F.semi, fontSize: 12.5, color: C.muted },
+  moneyTile: { backgroundColor: '#fff', borderRadius: 18, borderWidth: 1, borderColor: 'rgba(90,58,20,0.10)', padding: 14 },
+  moneyBig: { fontFamily: F.xbold, fontSize: 28, color: C.ink, letterSpacing: -0.8 },
+  platRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
+  platCell: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 5, paddingLeft: 5, paddingRight: 10, borderRadius: 999, backgroundColor: C.bone },
+  platCellAmt: { fontFamily: F.bold, fontSize: 12, color: C.ink },
+  banner: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: C.navy, borderRadius: 16, paddingVertical: 12, paddingHorizontal: 14, marginBottom: 8 },
+  bannerSoft: { backgroundColor: '#fff', borderWidth: 1, borderColor: C.line },
+  bannerT: { fontFamily: F.bold, fontSize: 14, color: '#fff' },
+  bannerS: { fontFamily: F.semi, fontSize: 12, color: 'rgba(255,255,255,0.75)', marginTop: 1 },
   propRow: { gap: 7, alignItems: 'center', paddingBottom: 12, paddingRight: 4 },
   pChip: { paddingVertical: 6, paddingHorizontal: 13, borderRadius: 999, borderWidth: 1, borderColor: C.line, backgroundColor: C.card },
   pChipOn: { backgroundColor: C.navy, borderColor: C.navy },
@@ -1032,19 +1168,23 @@ const st = StyleSheet.create({
   backTxt: { fontSize: 26, lineHeight: 28, color: C.ink, fontFamily: F.bold },
   headTitle: { fontFamily: F.xbold, fontSize: 19, color: C.ink, letterSpacing: -0.3 },
   headSub: { fontFamily: F.semi, fontSize: 12, marginTop: 1 },
-  sumBar: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', backgroundColor: C.redbg, paddingHorizontal: 16, paddingVertical: 11 },
-  sumLbl: { fontFamily: F.bold, fontSize: 10, letterSpacing: 1, color: C.red },
-  sumVal: { fontFamily: F.xbold, fontSize: 22, color: C.red },
+  sumBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: C.card, marginHorizontal: 14, marginTop: 12, paddingHorizontal: 16, paddingVertical: 14, borderRadius: 16, borderWidth: 1, borderColor: C.line },
+  sumLbl: { fontFamily: F.bold, fontSize: 13, color: C.ink },
+  sumSub: { fontFamily: F.semi, fontSize: 11.5, color: C.muted, marginTop: 2 },
+  sumVal: { fontFamily: F.xbold, fontSize: 24, color: C.ink, letterSpacing: -0.5 },
   chRow: { gap: 8, paddingHorizontal: 14, paddingTop: 12, paddingBottom: 2 },
   chTile: { minWidth: 118, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 14, backgroundColor: '#fff', borderWidth: 1.5, borderColor: C.hair },
-  chHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  chName: { fontFamily: F.bold, fontSize: 12 },
+  chHead: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  chName: { fontFamily: F.bold, fontSize: 12.5 },
   chAmt: { fontFamily: F.xbold, fontSize: 16, color: C.ink, marginTop: 5, letterSpacing: -0.3 },
   chN: { fontFamily: F.semi, fontSize: 11, color: C.muted, marginTop: 1 },
-  grpRow: { flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 6, marginBottom: 9, marginHorizontal: 2 },
-  grpName: { fontFamily: F.xbold, fontSize: 14, color: C.ink },
-  grpMeta: { fontFamily: F.semi, fontSize: 12, color: C.muted },
-  grpLink: { fontFamily: F.bold, fontSize: 12.5, color: G.gold2 },
+  grpRow: { flexDirection: 'row', alignItems: 'center', gap: 11, marginTop: 14, marginBottom: 11, marginHorizontal: 2 },
+  grpName: { fontFamily: F.xbold, fontSize: 19, color: C.ink, letterSpacing: -0.3 },
+  grpMeta: { fontFamily: F.semi, fontSize: 12.5, color: C.muted, marginTop: 1 },
+  grpAmt: { fontFamily: F.bold, color: C.ink },
+  grpBtn: { paddingVertical: 7, paddingHorizontal: 12, borderRadius: 999, borderWidth: 1, borderColor: G.gold2, backgroundColor: '#fff' },
+  grpBtnOn: { backgroundColor: G.gold2 },
+  grpLink: { fontFamily: F.bold, fontSize: 12, color: G.gold2 },
   segRow: { gap: 7, paddingHorizontal: 14, paddingTop: 12 },
   segBtn: { paddingVertical: 7, paddingHorizontal: 14, borderRadius: 999, borderWidth: 1, borderColor: C.line, backgroundColor: '#fff' },
   segOn: { backgroundColor: C.navy, borderColor: C.navy },
@@ -1063,8 +1203,8 @@ const st = StyleSheet.create({
   cName: { fontFamily: F.xbold, fontSize: 16.5, color: C.ink, letterSpacing: -0.2 },
   subRow: { flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 4 },
   cMeta: { fontFamily: F.semi, fontSize: 12, color: C.bark, flexShrink: 1 },
-  cDue: { fontFamily: F.xbold, fontSize: 17, color: C.red, letterSpacing: -0.3 },
-  cDueLbl: { fontFamily: F.bold, fontSize: 8.5, letterSpacing: 1, color: C.red, opacity: 0.75, marginTop: 1 },
+  cDue: { fontFamily: F.xbold, fontSize: 17, color: C.ink, letterSpacing: -0.3 },
+  cDueLbl: { fontFamily: F.bold, fontSize: 8.5, letterSpacing: 1, color: G.gold3, marginTop: 1 },
   paidChip: { backgroundColor: C.greenbg, borderRadius: 999, paddingVertical: 4, paddingHorizontal: 10 },
   paidTxt: { fontFamily: F.bold, fontSize: 11, color: C.green },
   duo: { width: 56, height: 50 },
