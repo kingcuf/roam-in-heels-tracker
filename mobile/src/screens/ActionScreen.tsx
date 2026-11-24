@@ -1,120 +1,138 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { BackHandler, Image, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { C, F, inr } from '../theme';
-import { Tilt3D } from '../motion';
-import { Panel, Btn, useToast } from '../ui';
+import { C, F, G, inr } from '../theme';
+import { Btn, useToast } from '../ui';
 import { Ticket, TicketKind, useStore } from '../store';
 import { api } from '../api';
 import {
-  CardData, EnquiryItem, EnquiryStatus, LowItem, TaskItem, ciFmtDay,
+  CardData, CiItem, EnquiryItem, EnquiryStatus, IdItem, LowItem, TaskItem, ciFmtDay,
   computeCheckins, computeEnquiries, computeIdsPending, computeLowStock, computePayouts, computeReviews,
-  computeTasks, fmtEnquiryWhen, taskWhen,
+  computeStays, computeTasks, fmtEnquiryWhen, taskWhen, todayIso, unitNumberOf,
 } from '../logic';
+import { unitNo } from '../propertyPicker';
 import TaskForm from './TaskForm';
 
-/* The Action tab — the app's default landing surface.
-   Everything here is derived from the same computations the Dashboard uses
-   (computeCheckins / computePayouts), never a second copy: the two surfaces
-   deliberately overlap, so a duplicated calculation would let them drift.
+/* The Action tab: the property manager's morning screen.
 
-   Two levels, not one. The overview is a grid of large cards — one per queue,
-   each showing only its count and the single most urgent item — and tapping one
-   opens that queue as its own page. Previously every section expanded inline on
-   the same screen, so seven open accordions of dense rows competed for the same
-   scroll; the count you wanted was somewhere below three other lists. Splitting
-   it means the landing screen answers "what needs me?" at a glance and the
-   detail page has the room to actually show a record. */
+   It answers three questions, in this order, on one screen:
+     1. Today       who arrives and who leaves, at what time, in which flat,
+                    and whether anything is missing for them (ID, money)
+     2. Needs you   every queue that has work in it, most urgent first, one
+                    line each, so 30 seconds of reading says what the day holds
+     3. Coming up   the next week's arrivals, to prepare the flats
+
+   Each queue opens as its own page (L2). Every page uses the same compact
+   booking row: name, unit, the stay on one line, the problem as a coloured
+   tag, and the one or two buttons that actually clear it (Call, WhatsApp,
+   Upload ID, Mark paid, Asked / Got it). The old cards spent most of a screen
+   on a single booking, repeating "time not recorded" and an empty unit box;
+   these rows fit four or five to a screen and say only what is known.
+
+   All figures come from the same computeX functions the Dashboard uses. */
 
 type SectionKey = 'ci' | 'co' | 'up' | 'rev' | 'ids' | 'pay' | 'low' | 'act' | 'enq';
-
-type Accent = { line: string; bg: string; ink: string };
-const ACCENT: Record<SectionKey, Accent> = {
-  ci:  { line: C.green,  bg: C.greenbg, ink: C.green },
-  co:  { line: C.sky,    bg: C.skybg,   ink: C.sky },
-  up:  { line: C.blue,   bg: C.amberbg, ink: C.blue2 },
-  rev: { line: C.copper, bg: C.amberbg, ink: C.blue2 },
-  ids: { line: C.red,    bg: C.redbg,   ink: C.red },
-  pay: { line: C.red,    bg: C.redbg,   ink: C.red },
-  low: { line: C.amber,  bg: C.amberbg, ink: C.amber },
-  act: { line: C.navy,   bg: C.bone,    ink: C.navy },
-  enq: { line: C.blue,   bg: C.amberbg, ink: C.blue2 },
+type Tone = { ink: string; bg: string };
+const TONE: Record<SectionKey, Tone> = {
+  ci: { ink: C.green, bg: C.greenbg },
+  co: { ink: G.gold3, bg: C.amberbg },
+  up: { ink: C.sky, bg: C.skybg },
+  rev: { ink: G.gold2, bg: C.amberbg },
+  ids: { ink: C.red, bg: C.redbg },
+  pay: { ink: C.red, bg: C.redbg },
+  low: { ink: C.amber, bg: C.amberbg },
+  act: { ink: C.navy, bg: C.bone },
+  enq: { ink: C.blue2, bg: C.amberbg },
 };
 const TITLE: Record<SectionKey, string> = {
-  ci: "Today's check-in",
-  co: "Today's check-out",
-  up: 'Upcoming bookings',
-  rev: 'Review follow-ups',
-  ids: 'IDs pending',
-  pay: 'Pending amount',
+  ci: 'Arriving today',
+  co: 'Leaving today',
+  up: 'Coming up',
+  rev: 'Ask for reviews',
+  ids: 'IDs missing',
+  pay: 'Payments due',
   low: 'Low stock',
-  /* Named for what it is — a list you keep by hand. It used to be 'Actions',
-     which on a screen that now also carries a 'Waiting for approval' card read
-     as "my requests" and said 0 beside a card saying 13. */
   act: 'To-do list',
   enq: 'Website enquiries',
 };
-/* Only the first N of a long queue render; the rest are counted, never dropped
-   silently. Upcoming is the only list that regularly runs past this. */
-const UPCOMING_CAP = 50;
+const UPCOMING_CAP = 60;
+const DAY = 86400000;
+
+const nameOf = (x: { guest: string; id: string }) => x.guest || x.id;
+const dayStart = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+const daysFromToday = (d: Date | null) => (d ? Math.round((dayStart(d) - dayStart(new Date())) / DAY) : null);
+const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const relDay = (d: Date | null) => {
+  if (!d) return '';
+  const n = daysFromToday(d)!;
+  if (n === 0) return 'Today';
+  if (n === 1) return 'Tomorrow';
+  if (n === -1) return 'Yesterday';
+  if (n > 1 && n < 7) return WD[d.getDay()];
+  return ciFmtDay(d);
+};
+const dayHead = (d: Date) => {
+  const n = daysFromToday(d)!;
+  const full = WD[d.getDay()] + ', ' + ciFmtDay(d);
+  return n === 0 ? 'Today · ' + full : n === 1 ? 'Tomorrow · ' + full : full;
+};
+function mins(t: string) {
+  const m = String(t || '').trim().match(/^(\d{1,2}):(\d{2})\s*(am|pm)?$/i);
+  if (!m) return 9999;
+  let h = parseInt(m[1], 10);
+  const ap = (m[3] || '').toLowerCase();
+  if (ap === 'pm' && h < 12) h += 12;
+  if (ap === 'am' && h === 12) h = 0;
+  return h * 60 + parseInt(m[2], 10);
+}
+/* The flat to go to. The stay unit when one was written, else the booked
+   property's own number. A stay unit equal to the trailing number of the
+   property name ("45" for "403, …, Sector 45") is the property itself. */
+function unitOf(c: CardData) {
+  const u = c.unit.trim();
+  const own = unitNo(c.prop) || c.prop;
+  if (!u || u === c.prop || u === unitNumberOf(c.prop)) return own;
+  return u;
+}
+const waNumber = (p: string) => {
+  const d = p.replace(/[^0-9]/g, '');
+  return d.length === 10 ? '91' + d : d;
+};
 
 export default function ActionScreen() {
   const s = useStore();
   const toast = useToast();
   const scroller = useRef<React.ComponentRef<typeof ScrollView>>(null);
   const [page, setPage] = useState<SectionKey | null>(null);
-  /* The app header shows on the overview only, not on these detail pages. */
   useEffect(() => { s.setActionDeep(!!page); }, [page]);
-  /* null = closed. { task: null } = adding, { task } = editing that one. */
   const [form, setForm] = useState<{ task: TaskItem | null } | null>(null);
   const [selPay, setSelPay] = useState<Record<number, boolean>>({});
-  /* For a Manager, marking a payout paid, moving a review on and ticking an
-     action off are all REQUESTS now: the worker returns pendingApproval and the
-     row does not move. A tap that changes nothing and says nothing is the
-     "I pressed it and nothing happened" failure this loop has been closing
-     everywhere else, so each of them now leaves two marks — a receipt at the
-     top of the page that stays, and a band on every row that has a request
-     against it. */
+  const [revTab, setRevTab] = useState<'pending' | 'requested'>('pending');
+  const [enqTab, setEnqTab] = useState<EnquiryStatus>('new');
+  /* A request raised by a Manager changes nothing until approved, so the page
+     keeps a receipt on top and every affected row says it is waiting. */
   const [sent, setSent] = useState<{ msg: string; ids: number[] } | null>(null);
-  /* A receipt belongs to the queue it was raised from. */
-  useEffect(() => { setSent(null); }, [page]);
+  useEffect(() => { setSent(null); setSelPay({}); }, [page]);
   const reqFor = (kind: TicketKind, row: number | string): Ticket | null => {
     const t = s.ticketFor(kind, row);
     return t && t.status === 'pending' ? t : null;
   };
-  /* One line, and it has to fit one line: the approver's name went in here
-     first and was clipped to "Any …". Who is deciding is on the receipt above. */
-  const waitBand = (t: Ticket, what: string) => ({
-    label: 'WAITING FOR APPROVAL',
-    text: `Request #${t.id} · ${what}`,
-  });
-  /* One place where a write either happened or became a request, so the three
-     controls below cannot drift apart again. */
   const afterWrite = async (r: any, done: string) => {
     if (r?.pendingApproval) {
       const ids: number[] = r.tickets && r.tickets.length ? r.tickets : (r.ticket ? [r.ticket] : []);
       setSent({ msg: r.message || 'Sent for approval', ids });
       toast(r.message || 'Sent for approval', true);
-      /* Nothing was written, so nothing needs re-reading but the requests. */
       await s.reloadTickets();
       return;
     }
     toast(r?.message || done, true);
     await s.reloadLogs();
   };
-  /* This tab's own property scope — deliberately not the Report tab's, which is
-     scoped to the Report. */
   const [prop, setProp] = useState('All');
-  /* Seeing the queues is action.view (it gates the tab); ticking, paying out,
-     chasing reviews and editing the to-do list is action.manage. */
   const manage = s.can('action.manage');
 
-  // re-tapping the active tab scrolls back to the top (matches the other tabs)
   useEffect(() => { scroller.current?.scrollTo({ y: 0, animated: true }); }, [s.retapSig]);
-  // a new page always starts at the top rather than inheriting the last scroll
+  useEffect(() => { if (s.retapSig) setPage(null); }, [s.retapSig]);
   useEffect(() => { scroller.current?.scrollTo({ y: 0, animated: false }); }, [page]);
-
-  /* Android's back gesture closes the detail page instead of the app — a page
-     you can only leave by hunting for an on-screen arrow reads as a trap. */
   useEffect(() => {
     if (!page) return;
     const sub = BackHandler.addEventListener('hardwareBackPress', () => { setPage(null); return true; });
@@ -127,1124 +145,789 @@ export default function ActionScreen() {
   const rev = useMemo(() => computeReviews(b, prop), [b, prop]);
   const ids = useMemo(() => computeIdsPending(b, prop, s.idMap), [b, prop, s.idMap]);
   const low = useMemo(() => computeLowStock(s.inv, prop, b), [s.inv, prop, b]);
-  /* Actions are the one queue with no property of their own — they are typed in,
-     not derived from a booking — so the property chips do not filter them. */
   const tasks = useMemo(() => computeTasks(s.logs?.tasks || null), [s.logs]);
-  /* Leads from roam-in-heels.com. Property-scoped like the booking queues. */
   const enq = useMemo(() => computeEnquiries(s.logs?.enquiries, prop), [s.logs, prop]);
+  const tk = todayIso();
+  const inHouse = useMemo(() => computeStays(b, prop).stays.filter((x) => x.inK < tk && x.outK > tk).length, [b, prop, tk]);
+  /* IDs sorted by who arrives first: a missing ID for tonight is urgent, one
+     for next month is not. */
+  const idsSorted = useMemo(() => [...ids].sort((a, c) => (a.ci ? a.ci.getTime() : 9e15) - (c.ci ? c.ci.getTime() : 9e15)), [ids]);
+  const idByRow = useMemo(() => { const m: Record<number, IdItem> = {}; ids.forEach((x) => { m[x.row] = x; }); return m; }, [ids]);
+  const idsSoon = ids.filter((x) => { const n = daysFromToday(x.ci); return n !== null && n <= 2; }).length;
 
   const count: Record<SectionKey, number> = {
     ci: ci.today.length, co: ci.checkoutsToday.length, up: ci.upcoming.length,
     rev: rev.length, ids: ids.length, pay: pay.list.length, low: low.length,
-    /* Only actions that have reached their end date count as needing attention;
-       the tile is a door to the whole list either way. */
-    act: tasks.due.length,
-    /* Only leads nobody has replied to yet need attention. */
-    enq: enq.fresh.length,
+    act: tasks.due.length, enq: enq.fresh.length,
   };
-  const total = (Object.keys(count) as SectionKey[]).reduce((t, k) => t + count[k], 0);
-
-  /* A queue can empty while its page is open — marking the last payout paid,
-     say. Dropping back to the overview beats an empty page with no explanation. */
   useEffect(() => {
-    /* 'act' is exempt: its count is only what is *due*, and the page is the
-       list of everything — ticking the last due action must not eject you. */
-    if (page && page !== 'act' && page !== 'enq' && !count[page]) setPage(null);
+    if (page && page !== 'act' && page !== 'enq' && page !== 'ci' && page !== 'co' && !count[page]) setPage(null);
   }, [page, count[page as SectionKey]]);
 
-  /* One line of context per card, so the overview is scannable without opening
-     anything: whichever item that queue would put first. */
-  const preview: Record<SectionKey, string> = {
-    ci: ci.today[0] ? nameOf(ci.today[0]) + (ci.today[0].inT ? ' · ' + ci.today[0].inT : '') : '',
-    co: ci.checkoutsToday[0]
-      ? nameOf(ci.checkoutsToday[0]) + (ci.checkoutsToday[0].outT ? ' · ' + ci.checkoutsToday[0].outT : '') : '',
-    up: ci.upcoming[0] ? ciFmtDay(ci.upcoming[0].date) + ' · ' + nameOf(ci.upcoming[0]) : '',
-    rev: rev[0] ? (rev[0].guest || rev[0].id) + ' · left ' + ciFmtDay(rev[0].out) : '',
-    ids: ids.reduce((t, x) => t + (x.expected - x.have), 0) + ' document(s) missing',
-    pay: inr(pay.total),
-    act: tasks.due.length
-      ? tasks.due[0].name
-      : tasks.open.length
-        ? 'Next: ' + tasks.open[0].name
-        : (tasks.done.length ? 'All done · ' + tasks.done.length + ' completed' : 'Nothing on the list yet'),
-    enq: enq.fresh[0]
-      ? enq.fresh[0].name + (enq.fresh[0].property ? ' · ' + enq.fresh[0].property : '')
-      : (enq.all.length ? 'All replied · ' + enq.all.length + ' total' : ''),
-    low: low.filter((i) => i.outNow).length
-      ? low.filter((i) => i.outNow).length + ' out of stock'
-      : (low[0] ? low[0].item : ''),
-  };
-
-  /* ── pending payments: multi-select → mark paid ── */
-  const selCount = Object.values(selPay).filter(Boolean).length;
-  const selTotal = pay.list.reduce((t, p) => (selPay[p.row] ? t + p.pending : t), 0);
+  /* ── writes ── */
+  const selRows = pay.list.filter((p) => selPay[p.row] && !reqFor('payout', p.row));
+  const selTotal = selRows.reduce((t, p) => t + p.pending, 0);
   const markPaid = async () => {
-    const rows = pay.list.filter((p) => selPay[p.row]).map((p) => p.row);
-    if (!rows.length) return;
+    if (!selRows.length) return;
     try {
-      const r = await api.setPayouts(s.pin, rows);
+      const r = await api.setPayouts(s.pin, selRows.map((p) => p.row));
       setSelPay({});
       await afterWrite(r, 'Marked paid');
     } catch (e: any) { toast(e?.message || 'Could not save', false); }
   };
-
-  /* ── review follow-ups: advance the tracked state ── */
   const setReview = async (row: number, status: 'requested' | 'received' | 'skipped') => {
     try {
       const r = await api.setReviewStatus(s.pin, row, status);
-      await afterWrite(r, status === 'received' ? 'Marked reviewed' : status === 'skipped' ? 'Skipped' : 'Marked requested');
+      await afterWrite(r, status === 'received' ? 'Marked reviewed' : status === 'skipped' ? 'Skipped' : 'Marked as asked');
     } catch (e: any) { toast(e?.message || 'Could not save', false); }
   };
-
-  /* ── actions: tick / untick ── */
   const toggleTask = async (t: TaskItem) => {
-    if (!manage) { toast('Your role can view actions but not change them', false); return; }
+    if (!manage) { toast('Your role can view the to-do list but not change it', false); return; }
     try {
-      /* The desired state is sent, not a toggle, so a double tap or a retry
-         after a timeout lands on the same value instead of undoing itself. */
       const r = await api.setTaskDone(s.pin, t.row, !t.done);
-      /* An instant tick needs no words — the box fills in. A request changes
-         nothing on screen, so it has to say so. */
       if (r?.pendingApproval) await afterWrite(r, '');
       else await s.reloadLogs();
     } catch (e: any) { toast(e?.message || 'Could not save', false); }
   };
-
-  /* ── website enquiries: move a lead along ── */
   const setEnquiry = async (e: EnquiryItem, status: EnquiryStatus) => {
     if (!manage) { toast('Your role can view enquiries but not change them', false); return; }
     try {
       const r = await api.setEnquiryStatus(s.pin, e.row, status);
-      await afterWrite(r, 'Saved');
+      await afterWrite(r, 'Moved to ' + ENQ_LABEL[status]);
     } catch (err: any) { toast(err?.message || 'Could not save', false); }
   };
-
-  /* Restock: open the Inventory movement form prefilled for this item. */
   const addStock = (i: LowItem) => {
     if (!s.can('inventory.add')) { toast('Your role cannot log stock', false); return; }
-    s.setInvTarget(i.key);
-    s.setAddSeg('inv');
-    s.setTab('add');
+    s.setInvTarget(i.key); s.setAddSeg('inv'); s.setTab('add');
   };
-
-  /* The lead guest's ID document, if one has been uploaded — the card shows it
-     as the avatar. Falls back to the co-guest's so a card is not blank when only
-     the second document exists. */
   const docFor = (row: number) => {
     const docs = s.idDocs?.[String(row)] || [];
-    /* The front of the lead guest's ID is the portrait side; a back is a
-       document scan and makes a poor avatar, so it is the last resort. */
-    const pick = docs.find((d) => d.slot === 'lead')
-      || docs.find((d) => d.slot === 'co')
-      || docs[0];
-    /* PDFs are documents, not portraits — <Image> cannot render one, so the
-       initial is shown instead. */
+    const pick = docs.find((d) => d.slot === 'lead') || docs.find((d) => d.slot === 'co') || docs[0];
     return pick && !/pdf/i.test(pick.type || '') ? pick.id : undefined;
   };
-
-  /* The booking page; editing is one tap from there. */
   const openBooking = (row: number) => s.openBooking(row);
+  const contact = (c: CardData) => (c.phone ? [
+    { label: 'Call', onPress: () => Linking.openURL('tel:' + c.phone.replace(/[^0-9+]/g, '')) },
+    { label: 'WhatsApp', onPress: () => Linking.openURL('https://wa.me/' + waNumber(c.phone)) },
+  ] : []);
+  /* The problems a booking still has, as tags: the same everywhere. */
+  const flagsOf = (c: CardData, skip: { id?: boolean; due?: boolean } = {}) => {
+    const f: Flag[] = [];
+    const idx = idByRow[c.row];
+    if (!skip.id && idx && idx.missing.length) f.push({ text: idx.have + '/' + idx.expected + ' IDs', tone: 'bad' });
+    if (!skip.due && c.pending > 0) f.push({ text: inr(c.pending) + ' due', tone: 'bad' });
+    if (c.type === 'Resold' && c.referrer) f.push({ text: 'Resold · ' + c.referrer, tone: 'info' });
+    return f;
+  };
 
-  /* ── add / edit an action ── */
   if (form) {
-    return (
-      <TaskForm
-        task={form.task}
-        pin={s.pin}
-        onClose={() => setForm(null)}
-        onSaved={(r) => afterWrite(r, 'Saved')}
-      />
-    );
+    return <TaskForm task={form.task} pin={s.pin} onClose={() => setForm(null)} onSaved={(r) => afterWrite(r, 'Saved')} />;
   }
 
-  /* ── detail page ── */
+  /* ════════════════ L2: one queue ════════════════ */
   if (page) {
+    const tone = TONE[page];
+    const subline = (() => {
+      switch (page) {
+        case 'ci': return ci.today.length ? ci.today.length + ' guest' + (ci.today.length === 1 ? '' : 's') + ' · ' + ci.today.filter((x) => idByRow[x.row]).length + ' without ID' : 'Nobody arriving';
+        case 'co': return ci.checkoutsToday.length ? ci.checkoutsToday.length + ' departure' + (ci.checkoutsToday.length === 1 ? '' : 's') : 'Nobody leaving';
+        case 'up': return ci.upcoming.length + ' arrival' + (ci.upcoming.length === 1 ? '' : 's') + ' ahead';
+        case 'rev': return rev.length + ' guest' + (rev.length === 1 ? '' : 's') + ' to follow up';
+        case 'ids': return ids.reduce((t, x) => t + (x.expected - x.have), 0) + ' documents missing' + (idsSoon ? ' · ' + idsSoon + ' arriving within 2 days' : '');
+        case 'pay': return pay.list.length + ' booking' + (pay.list.length === 1 ? '' : 's');
+        case 'low': return low.filter((i) => i.outNow).length + ' out of stock · ' + low.filter((i) => !i.outNow).length + ' running low';
+        case 'act': return tasks.open.length + ' open · ' + tasks.due.length + ' due';
+        case 'enq': return enq.fresh.length + ' new · ' + enq.all.length + ' total';
+      }
+    })();
+    const headRight = page === 'pay' && manage && pay.list.length ? (
+      <TouchableOpacity onPress={() => {
+        const all = pay.list.filter((p) => !reqFor('payout', p.row));
+        const on = all.every((p) => selPay[p.row]);
+        setSelPay(on ? {} : Object.fromEntries(all.map((p) => [p.row, true])));
+      }} hitSlop={8}>
+        <Text style={st.headLink}>{pay.list.filter((p) => !reqFor('payout', p.row)).every((p) => selPay[p.row]) ? 'Clear' : 'Select all'}</Text>
+      </TouchableOpacity>
+    ) : page === 'act' && manage ? (
+      <TouchableOpacity onPress={() => setForm({ task: null })} hitSlop={8}><Text style={st.headLink}>+ Add</Text></TouchableOpacity>
+    ) : null;
+
     return (
-      <View style={{ flex: 1 }}>
-        <PageHead
-          title={TITLE[page]}
-          /* The Actions page is about the whole open list, not just what is
-             due — which is the number the tile shows. */
-          n={page === 'act' ? tasks.open.length : page === 'enq' ? enq.all.length : count[page]}
-          accent={ACCENT[page]}
-          scope={prop === 'All' ? '' : prop}
-          onBack={() => setPage(null)}
-        />
-        {/* The number the page is about, before any of the rows — sitting above
-            the scroll so it stays put however far down the list you are. */}
+      <View style={{ flex: 1, backgroundColor: C.bg }}>
+        <View style={st.head}>
+          <TouchableOpacity onPress={() => setPage(null)} style={st.back} activeOpacity={0.6} hitSlop={10} accessibilityLabel="Back">
+            <Text style={st.backTxt}>‹</Text>
+          </TouchableOpacity>
+          <View style={{ flex: 1 }}>
+            <Text style={st.headTitle} numberOfLines={1}>{TITLE[page]}</Text>
+            <Text style={[st.headSub, { color: tone.ink }]} numberOfLines={1}>{subline}{prop !== 'All' ? ' · ' + prop : ''}</Text>
+          </View>
+          {headRight}
+        </View>
+
         {page === 'pay' ? (
-          <View style={st.totalBar}>
-            <View style={{ flex: 1 }}>
-              <Text style={st.totalLbl}>TOTAL AWAITING PAYOUT</Text>
-              <Text style={st.totalVal}>{inr(pay.total)}</Text>
-            </View>
-            <View style={{ alignItems: 'flex-end' }}>
-              <Text style={st.totalSub}>
-                across {pay.list.length} booking{pay.list.length === 1 ? '' : 's'}
-              </Text>
-              {selCount > 0 ? (
-                <Text style={st.totalSel}>{selCount} ticked · {inr(selTotal)}</Text>
-              ) : null}
-            </View>
+          <View style={st.sumBar}>
+            <Text style={st.sumLbl}>STILL TO COLLECT</Text>
+            <Text style={st.sumVal}>{inr(pay.total)}</Text>
           </View>
         ) : null}
-        {/* The receipt for what was just asked for. Outside the scroll, like
-            the payout total above it, so it is still there after scrolling the
-            list looking for the row that did not change. */}
+        {page === 'rev' ? (
+          <Seg value={revTab} onChange={(v) => setRevTab(v as any)} options={[
+            { key: 'pending', label: 'To ask', n: rev.filter((x) => x.status !== 'requested').length },
+            { key: 'requested', label: 'Asked, waiting', n: rev.filter((x) => x.status === 'requested').length },
+          ]} />
+        ) : null}
+        {page === 'enq' ? (
+          <Seg value={enqTab} onChange={(v) => setEnqTab(v as EnquiryStatus)} options={(['new', 'contacted', 'booked', 'closed'] as const).map((k) => ({
+            key: k, label: ENQ_LABEL[k], n: enq.all.filter((e) => e.status === k).length,
+          }))} />
+        ) : null}
+
         {sent ? (
           <View style={st.sentBox}>
             <Text style={st.sentHead}>{sent.msg}</Text>
-            <Text style={st.sentBody}>
-              Nothing below changes until an admin approves
-              {sent.ids.length > 1 ? ' each request' : ' it'}. The rows stay as they are, marked “waiting”.
-            </Text>
+            <Text style={st.sentBody}>Nothing below changes until an admin approves{sent.ids.length > 1 ? ' each request' : ' it'}; the rows are marked “waiting”.</Text>
             <View style={st.sentRow}>
-              {sent.ids.length ? (
-                <Btn
-                  title={sent.ids.length > 1 ? `View my ${sent.ids.length} requests` : `View request #${sent.ids[0]}`}
-                  kind="mini" onPress={() => s.openMyRequests(sent.ids[0])}
-                />
-              ) : null}
+              {sent.ids.length ? <Btn title={sent.ids.length > 1 ? `View my ${sent.ids.length} requests` : `View request #${sent.ids[0]}`} kind="mini" onPress={() => s.openMyRequests(sent.ids[0])} /> : null}
               <Btn title="Dismiss" kind="mini" onPress={() => setSent(null)} />
             </View>
           </View>
         ) : null}
-        <ScrollView
-          ref={scroller}
-          style={{ flex: 1 }}
-          contentContainerStyle={{ padding: 14, paddingBottom: page === 'pay' && selCount ? 96 : 36 }}
-        >
-          {page === 'ci' && ci.today.map((x) => (
-            <BookingCard
-              key={'ci' + x.row} c={x.card} pin={s.pin} docId={docFor(x.row)}
-              emphasis="in"
-              sub={'Arriving today' + (x.card.inT ? ' · ' + x.card.inT : '')}
-              band={x.card.type === 'Resold' && x.card.referrer
-                ? { label: 'RESOLD', text: x.card.referrer } : undefined}
-              fields={moneyFields(x.card)}
-              onOpen={() => openBooking(x.row)}
-            />
-          ))}
-          {page === 'co' && ci.checkoutsToday.map((x) => (
-            <BookingCard
-              key={'co' + x.row} c={x.card} pin={s.pin} docId={docFor(x.row)}
-              emphasis="out"
-              sub={'Leaving today' + (x.card.outT ? ' · ' + x.card.outT : '')}
-              band={x.card.type === 'Resold' && x.card.referrer
-                ? { label: 'RESOLD', text: x.card.referrer } : undefined}
-              fields={moneyFields(x.card)}
-              onOpen={() => openBooking(x.row)}
-            />
-          ))}
+
+        <ScrollView ref={scroller} style={{ flex: 1 }} contentContainerStyle={{ padding: 14, paddingBottom: page === 'pay' && selRows.length ? 110 : 40 }}>
+          {page === 'ci' && (ci.today.length ? ci.today.map((x) => (
+            <BRow key={'ci' + x.row} c={x.card} pin={s.pin} docId={docFor(x.row)} focus="in"
+              right={x.card.inT ? <TimePill t={x.card.inT} kind="in" /> : undefined}
+              flags={flagsOf(x.card)} actions={contact(x.card)}
+              primary={idByRow[x.row] ? { label: 'Upload ID', onPress: () => s.setIdTarget(idByRow[x.row]) } : undefined}
+              onPress={() => openBooking(x.row)} />
+          )) : <Empty title="Nobody arriving today" sub="Arrivals for the next days are under Coming up." />)}
+
+          {page === 'co' && (ci.checkoutsToday.length ? ci.checkoutsToday.map((x) => (
+            <BRow key={'co' + x.row} c={x.card} pin={s.pin} docId={docFor(x.row)} focus="out"
+              right={x.card.outT ? <TimePill t={x.card.outT} kind="out" /> : undefined}
+              flags={flagsOf(x.card, { id: true })} actions={contact(x.card)}
+              onPress={() => openBooking(x.row)} />
+          )) : <Empty title="Nobody leaving today" />)}
+
           {page === 'up' && (
             <>
-              {ci.upcoming.slice(0, UPCOMING_CAP).map((x) => (
-                <BookingCard
-                  key={'up' + x.row} c={x.card} pin={s.pin} docId={docFor(x.row)}
-                  emphasis="in"
-                  sub={'Arrives ' + ciFmtDay(x.date)}
-                  band={x.card.type === 'Resold' && x.card.referrer
-                    ? { label: 'RESOLD', text: x.card.referrer } : undefined}
-                  fields={moneyFields(x.card)}
-                  onOpen={() => openBooking(x.row)}
-                />
+              {groupByDay(ci.upcoming.slice(0, UPCOMING_CAP)).map((g) => (
+                <View key={g.key}>
+                  <Text style={st.groupHead}>{dayHead(g.date)}</Text>
+                  {g.items.map((x) => (
+                    <BRow key={'up' + x.row} c={x.card} pin={s.pin} docId={docFor(x.row)} focus="in"
+                      right={x.card.inT ? <TimePill t={x.card.inT} kind="in" /> : undefined}
+                      flags={flagsOf(x.card)} onPress={() => openBooking(x.row)}
+                      primary={idByRow[x.row] ? { label: 'Upload ID', onPress: () => s.setIdTarget(idByRow[x.row]) } : undefined} />
+                  ))}
+                </View>
               ))}
-              {ci.upcoming.length > UPCOMING_CAP ? (
-                <Text style={st.more}>+{ci.upcoming.length - UPCOMING_CAP} more upcoming not shown</Text>
-              ) : null}
+              {ci.upcoming.length > UPCOMING_CAP ? <Text style={st.more}>+{ci.upcoming.length - UPCOMING_CAP} later arrivals: see the Calendar</Text> : null}
             </>
           )}
-          {page === 'rev' && rev.map((x) => {
-            const req = reqFor('review', x.row);
+
+          {page === 'rev' && (() => {
+            const list = rev.filter((x) => (revTab === 'requested') === (x.status === 'requested'));
+            if (!list.length) return <Empty title={revTab === 'requested' ? 'No one waiting' : 'Everyone has been asked'} sub={revTab === 'requested' ? 'Guests you have asked show here until the review arrives.' : 'Guests who checked out appear here the day after.'} />;
+            return list.map((x) => {
+              const req = reqFor('review', x.row);
+              return (
+                <BRow key={'rv' + x.row} c={x.card} pin={s.pin} docId={docFor(x.row)} focus="out"
+                  wait={req ? '#' + req.id + ' · review status' : undefined}
+                  flags={[]} actions={contact(x.card)}
+                  buttons={!manage || req ? undefined : [
+                    ...(x.status !== 'requested' ? [{ label: 'Asked', onPress: () => setReview(x.row, 'requested') }] : []),
+                    { label: 'Got review', onPress: () => setReview(x.row, 'received'), solid: true },
+                    { label: 'Skip', onPress: () => setReview(x.row, 'skipped'), quiet: true },
+                  ]}
+                  onPress={() => openBooking(x.row)} />
+              );
+            });
+          })()}
+
+          {page === 'ids' && idsSorted.map((x) => {
+            const n = daysFromToday(x.ci);
+            const urgent = n !== null && n <= 2;
+            /* Name who is missing only when it is not simply the guest on the card. */
+            const who = x.missing.length === 1 && x.missing[0] === 'lead' ? ''
+              : ' · missing ' + x.missing.map((sl) => sl === 'lead' ? (x.guest || 'lead guest') : (x.coGuest || 'co-guest')).join(' and ');
             return (
-            <BookingCard
-              key={'rv' + x.row} c={x.card} pin={s.pin} docId={docFor(x.row)}
-              emphasis="out"
-              sub={x.status === 'requested' ? 'Already asked — waiting' : 'Not asked yet'}
-              band={req ? waitBand(req, 'review status') : undefined}
-              /* The queue is about the review, so the fields are about the
-                 review: money is a tap away on the booking. */
-              fields={[
-                { label: 'Left', value: ciFmtDay(x.out) },
-                { label: 'Chase since', value: ciFmtDay(x.due) },
-                { label: 'Status', value: x.status === 'requested' ? 'Asked' : 'Not asked',
-                  tone: x.status === 'requested' ? C.blue2 : C.muted },
-              ]}
-              actions={!manage ? undefined :
-                <View style={st.btnRow}>
-                  {x.status === 'pending' ? (
-                    <TouchableOpacity style={st.act} onPress={() => setReview(x.row, 'requested')} activeOpacity={0.7}>
-                      <Text style={st.actTxt}>Asked</Text>
-                    </TouchableOpacity>
-                  ) : null}
-                  <TouchableOpacity style={[st.act, st.actOk]} onPress={() => setReview(x.row, 'received')} activeOpacity={0.7}>
-                    <Text style={[st.actTxt, { color: '#fff' }]}>Got it</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={st.act} onPress={() => setReview(x.row, 'skipped')} activeOpacity={0.7}>
-                    <Text style={[st.actTxt, { color: C.muted }]}>Skip</Text>
-                  </TouchableOpacity>
-                </View>
-              }
-              onOpen={() => openBooking(x.row)}
-            />
+              <BRow key={'id' + x.row} c={x.card} pin={s.pin} docId={docFor(x.row)} focus="in"
+                right={<Text style={[st.count, urgent && st.countBad]}>{x.have}/{x.expected}</Text>}
+                note={(x.ci ? (n! < 0 ? 'Checked in ' + relDay(x.ci) : n === 0 ? 'Arrives today' : n === 1 ? 'Arrives tomorrow' : 'Arrives ' + relDay(x.ci)) : 'No check-in date') + who}
+                noteTone={urgent ? C.red : undefined}
+                flags={flagsOf(x.card, { id: true })}
+                primary={{ label: 'Upload ID', onPress: () => s.setIdTarget(x) }}
+                onPress={() => s.setIdTarget(x)} onOpen={() => openBooking(x.row)} />
             );
           })}
-          {page === 'ids' && ids.map((x) => (
-            <BookingCard
-              key={'id' + x.row} c={x.card} pin={s.pin} docId={docFor(x.row)}
-              emphasis="in"
-              sub={(x.guests ? x.guests + ' guest' + (x.guests === 1 ? '' : 's') + ' · ' : '') +
-                   (x.ci ? 'checks in ' + ciFmtDay(x.ci) : 'no check-in date')}
-              right={<Text style={[st.tag, x.have > 0 && st.tagPart]}>{x.have} of {x.expected}</Text>}
-              /* Name the people, not the storage slots: "lead" is what the
-                 database calls the row, not something anyone should read. */
-              band={x.missing.length ? {
-                label: 'ID NOT UPLOADED',
-                text: x.missing
-                  .map((sl) => sl === 'lead'
-                    ? (x.guest ? x.guest + ' (lead guest)' : 'Lead guest')
-                    : (x.coGuest ? x.coGuest + ' (co-guest)' : 'Co-guest — name not recorded'))
-                  .join(' · '),
-              } : undefined}
-              fields={[
-                { label: 'IDs on file', value: x.have + ' of ' + x.expected },
-                { label: 'Lead guest', value: x.missing.indexOf('lead') < 0 ? 'On file' : 'Missing',
-                  tone: x.missing.indexOf('lead') < 0 ? C.green : C.red },
-                { label: 'Co-guest', value: !x.coGuest ? 'None' :
-                    x.missing.indexOf('co') < 0 ? 'On file' : 'Missing',
-                  tone: !x.coGuest ? C.muted : x.missing.indexOf('co') < 0 ? C.green : C.red },
-              ]}
-              onPress={() => s.setIdTarget(x)}
-              hint="Tap to upload documents"
-              onOpen={() => openBooking(x.row)}
-            />
-          ))}
+
           {page === 'pay' && pay.list.map((p) => {
-            /* A payout with a request already against it: the row is still here
-               because nothing has been settled, and this is why. */
             const req = reqFor('payout', p.row);
+            const on = !!selPay[p.row] && !req;
             return (
-            <BookingCard
-              key={'pay' + p.row} c={p.card} pin={s.pin} docId={docFor(p.row)}
-              emphasis="none"
-              sub={(p.card.type || 'Stay') + (p.date ? ' · booked ' + p.date : '')}
-              band={req ? waitBand(req, 'marked paid') : undefined}
-              selectable={manage && !req} selected={!!selPay[p.row]}
-              /* Not just the tick box: the whole card stops being tickable once
-                 a request is against it. Hiding the box while the body still
-                 toggled left a row that showed no tick and was counted in
-                 "1 ticked · ₹6,990" all the same. */
-              onToggle={req ? undefined : () => setSelPay((m) => ({ ...m, [p.row]: !m[p.row] }))}
-              fields={[
-                { label: p.card.paid > 0 ? 'Total paid' : 'Total', value: p.card.paid > 0 ? inr(p.card.paid) : '' },
-                { label: 'Net earning', value: inr(p.card.net), tone: C.green },
-                { label: 'Awaiting', value: inr(p.pending), tone: C.red, big: true },
-              ]}
-              hint={!manage ? undefined
-                : req ? 'Already asked for — waiting for approval'
-                : selPay[p.row] ? 'Ticked — will be marked paid' : 'Tap the card to tick'}
-              onOpen={() => openBooking(p.row)}
-            />
+              <BRow key={'pay' + p.row} c={p.card} pin={s.pin} docId={docFor(p.row)} focus="none"
+                select={manage && !req ? on : undefined}
+                right={<Text style={st.due}>{inr(p.pending)}</Text>}
+                note={[p.card.paid ? 'Guest paid ' + inr(p.card.paid) : '', 'net ' + inr(p.card.net)].filter(Boolean).join(' · ')}
+                wait={req ? '#' + req.id + ' · marked paid' : undefined}
+                flags={[]} actions={contact(p.card)}
+                onPress={manage && !req ? () => setSelPay((m) => ({ ...m, [p.row]: !m[p.row] })) : () => openBooking(p.row)}
+                onOpen={manage && !req ? () => openBooking(p.row) : undefined} />
             );
           })}
-          {page === 'low' && low.map((i) => (
-            <LowCard key={'low' + i.r} i={i} onAdd={() => addStock(i)} />
+
+          {page === 'low' && [...low].sort((a, c) => Number(c.outNow) - Number(a.outNow)).map((i) => (
+            <LowRow key={'low' + i.r} i={i} onAdd={() => addStock(i)} />
           ))}
-          {page === 'enq' && (
-            enq.all.length ? (
-              (['new', 'contacted', 'booked', 'closed'] as const).map((k) => {
-                const g = enq.all.filter((e) => e.status === k);
+
+          {page === 'enq' && (() => {
+            const list = enq.all.filter((e) => e.status === enqTab);
+            if (!list.length) return <Empty title={'No ' + ENQ_LABEL[enqTab].toLowerCase() + ' enquiries'} sub="Enquiries from roam-in-heels.com land here." />;
+            return list.map((e) => <EnquiryRow key={'e' + e.row} e={e} manage={manage} onStatus={(x) => setEnquiry(e, x)} />);
+          })()}
+
+          {page === 'act' && (tasks.all.length ? (
+            <>
+              {(['overdue', 'today', 'upcoming'] as const).map((k) => {
+                const g = tasks.open.filter((t) => t.state === k);
                 if (!g.length) return null;
                 return (
                   <View key={k}>
-                    <Text style={st.groupHead}>{ENQ_LABEL[k].toUpperCase()} · {g.length}</Text>
-                    {g.map((e) => (
-                      <EnquiryCard key={'e' + e.row} e={e} manage={manage} onStatus={(x) => setEnquiry(e, x)} />
-                    ))}
+                    <Text style={[st.groupHead, k === 'overdue' && { color: C.red }]}>{k === 'overdue' ? 'Overdue' : k === 'today' ? 'Due today' : 'Later'} · {g.length}</Text>
+                    <View style={st.listCard}>
+                      {g.map((t, i) => <TaskRow key={'t' + t.row} t={t} last={i === g.length - 1} req={reqFor('taskdone', t.row) || reqFor('task', t.row)}
+                        onToggle={() => toggleTask(t)} onEdit={() => { if (manage) setForm({ task: t }); }} />)}
+                    </View>
                   </View>
                 );
-              })
-            ) : (
-              <Panel style={{ alignItems: 'center', paddingVertical: 38 }}>
-                <Text style={st.clearTitle}>No enquiries yet</Text>
-                <Text style={st.clearSub}>Enquiries sent from roam-in-heels.com will appear here.</Text>
-              </Panel>
-            )
-          )}
-          {page === 'act' && (
-            tasks.all.length ? (
-              <>
-                {(['overdue', 'today', 'upcoming'] as const).map((k) => {
-                  const g = tasks.open.filter((t) => t.state === k);
-                  if (!g.length) return null;
-                  return (
-                    <View key={k}>
-                      <Text style={st.groupHead}>
-                        {k === 'overdue' ? 'OVERDUE' : k === 'today' ? 'DUE TODAY' : 'UPCOMING'} · {g.length}
-                      </Text>
-                      {g.map((t) => (
-                        <TaskCard key={'t' + t.row} t={t} req={reqFor('taskdone', t.row) || reqFor('task', t.row)}
-                          onToggle={() => toggleTask(t)} onEdit={() => { if (manage) setForm({ task: t }); }} />
-                      ))}
-                    </View>
-                  );
-                })}
-                {tasks.done.length ? (
-                  <View>
-                    <Text style={st.groupHead}>DONE · {tasks.done.length}</Text>
-                    {tasks.done.map((t) => (
-                      <TaskCard key={'t' + t.row} t={t} req={reqFor('taskdone', t.row) || reqFor('task', t.row)}
-                        onToggle={() => toggleTask(t)} onEdit={() => { if (manage) setForm({ task: t }); }} />
-                    ))}
+              })}
+              {tasks.done.length ? (
+                <View>
+                  <Text style={st.groupHead}>Done · {tasks.done.length}</Text>
+                  <View style={st.listCard}>
+                    {tasks.done.map((t, i) => <TaskRow key={'t' + t.row} t={t} last={i === tasks.done.length - 1} req={reqFor('taskdone', t.row) || reqFor('task', t.row)}
+                      onToggle={() => toggleTask(t)} onEdit={() => { if (manage) setForm({ task: t }); }} />)}
                   </View>
-                ) : null}
-              </>
-            ) : (
-              <Panel style={{ alignItems: 'center', paddingVertical: 38 }}>
-                <Text style={st.clearTitle}>No actions yet</Text>
-                <Text style={st.clearSub}>
-                  Anything that needs doing but is not a booking, an expense or a stock item.
-                  Give it a name and an end date and it will show up here when it comes due.
-                </Text>
-                <View style={{ marginTop: 14 }}>
-                  {manage ? <Btn title="+ Add an action" onPress={() => setForm({ task: null })} /> : null}
                 </View>
-              </Panel>
-            )
-          )}
+              ) : null}
+            </>
+          ) : (
+            <Empty title="Nothing on the list" sub="For anything that is not a booking, an expense or stock: fix the geyser, renew the listing. Give it a date and it shows here when due."
+              cta={manage ? { label: '+ Add a to-do', onPress: () => setForm({ task: null }) } : undefined} />
+          ))}
         </ScrollView>
-        {/* Same + as the overview, so a new action can be filed from the list
-            you are already looking at. */}
-        {page === 'act' && manage ? <Fab onPress={() => setForm({ task: null })} /> : null}
-        {/* Kept out of the scroll so the action stays reachable however far down
-            the list the last tick was. */}
-        {page === 'pay' && manage && selCount > 0 ? (
+
+        {page === 'pay' && manage && selRows.length > 0 ? (
           <View style={st.footer}>
-            <Btn title={`Mark ${selCount} paid · ${inr(selTotal)}`} onPress={markPaid} />
+            <Btn title={`Mark ${selRows.length} paid · ${inr(selTotal)}`} onPress={markPaid} />
           </View>
         ) : null}
       </View>
     );
   }
 
-  /* ── overview ── */
-  const keys: SectionKey[] = ['ci', 'co', 'up', 'rev', 'ids', 'pay', 'low'];
-  /* Empty queues stay out of the way — except Actions, which is always shown:
-     it is the only tile that is also the way *in* to a list you maintain by
-     hand, and hiding it when nothing is due would hide the list itself. */
-  const live: SectionKey[] = [
-    ...keys.filter((k) => count[k] > 0),
-    /* Shown once any enquiry exists, even when all are answered: the tile is
-       also the way back to a lead you called last week. */
-    ...(enq.all.length ? ['enq' as SectionKey] : []),
-    'act',
-  ];
-  /* Change requests waiting for this user's approval — only for approvers,
-     and only when there is something to decide. Not property-scoped: a
-     request is about a record, and the decision is yours either way. */
-  const waiting = s.can('tickets.approve')
-    ? (s.tickets?.review || []).filter((t) => t.status === 'pending')
-    : [];
-  const aprSub = waiting.length
-    ? `${waiting[0].label}${waiting[0].requester ? ' · from ' + waiting[0].requester : ''}`
-    : '';
-  /* This user's own live requests. Without this tile the home screen answered
-     "nothing on the list" to someone who had just sent six things — the two
-     places you look after submitting both said there was nothing. */
+  /* ════════════════ L1: the overview ════════════════ */
+  const waiting = s.can('tickets.approve') ? (s.tickets?.review || []).filter((t) => t.status === 'pending') : [];
   const mine = s.myLive;
   const sentBack = mine.filter((t) => t.status === 'open').length;
-  const mineSub = sentBack
-    ? `${sentBack} sent back — needs your fix`
-    : (mine[0] ? mine[0].label : '');
+
+  /* Today's movements, in time order: the door list. */
+  const moves = [
+    ...ci.today.map((x) => ({ x, kind: 'in' as const, t: x.card.inT })),
+    ...ci.checkoutsToday.map((x) => ({ x, kind: 'out' as const, t: x.card.outT })),
+  ].sort((a, c) => mins(a.t) - mins(c.t) || (a.kind === 'out' ? -1 : 1));
+  const MOVES_SHOWN = 5;
+
+  /* Needs you: urgency order, one line each. Empty queues stay out. */
+  const outNow = low.filter((i) => i.outNow).length;
+  const needs: { key: string; n: number; title: string; sub: string; tone: Tone; onPress: () => void }[] = [];
+  if (waiting.length) needs.push({ key: 'apr', n: waiting.length, title: waiting.length === 1 ? 'Approval needed' : 'Approvals needed', sub: waiting[0].label + (waiting[0].requester ? ' · from ' + waiting[0].requester : ''), tone: { ink: G.gold3, bg: C.amberbg }, onPress: s.openApprovals });
+  if (mine.length) needs.push({ key: 'mine', n: mine.length, title: sentBack ? 'Sent back to you' : 'Your requests', sub: sentBack ? sentBack + ' need your fix' : 'Waiting for approval · ' + mine[0].label, tone: { ink: C.amber, bg: C.amberbg }, onPress: () => s.openMyRequests() });
+  if (count.ids) needs.push({ key: 'ids', n: count.ids, title: TITLE.ids, sub: idsSoon ? idsSoon + ' guest' + (idsSoon === 1 ? '' : 's') + ' arriving within 2 days' : nameOf(idsSorted[0]) + ' · ' + (idsSorted[0].ci ? 'arrives ' + relDay(idsSorted[0].ci) : 'no date'), tone: TONE.ids, onPress: () => setPage('ids') });
+  if (count.pay) needs.push({ key: 'pay', n: count.pay, title: TITLE.pay, sub: inr(pay.total) + ' still to collect', tone: TONE.pay, onPress: () => setPage('pay') });
+  if (count.enq) needs.push({ key: 'enq', n: count.enq, title: 'New enquiries', sub: enq.fresh[0].name + (enq.fresh[0].property ? ' · ' + enq.fresh[0].property : ''), tone: TONE.enq, onPress: () => setPage('enq') });
+  if (count.rev) needs.push({ key: 'rev', n: count.rev, title: TITLE.rev, sub: rev.filter((x) => x.status !== 'requested').length + ' not asked yet · ' + rev.filter((x) => x.status === 'requested').length + ' waiting', tone: TONE.rev, onPress: () => setPage('rev') });
+  if (count.low) needs.push({ key: 'low', n: count.low, title: TITLE.low, sub: outNow ? outNow + ' out of stock' : low[0].item + ' running low', tone: TONE.low, onPress: () => setPage('low') });
+  if (count.act) needs.push({ key: 'act', n: count.act, title: 'To-dos due', sub: tasks.due[0].name, tone: TONE.act, onPress: () => setPage('act') });
+
+  const soon = ci.upcoming.filter((x) => { const n = daysFromToday(x.date); return n !== null && n <= 7; });
+  const now = new Date();
+  const hello = now.getHours() < 12 ? 'Good morning' : now.getHours() < 17 ? 'Good afternoon' : 'Good evening';
 
   return (
     <View style={{ flex: 1 }}>
-    <ScrollView ref={scroller} style={{ flex: 1 }} contentContainerStyle={{ padding: 14, paddingBottom: 36 }}>
-      {/* property scope for this tab only */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={st.propRow}>
-        {['All', ...s.props.map((pp) => pp.name)].map((n) => {
-          const on = n === prop;
-          return (
-            <TouchableOpacity
-              key={n}
-              style={[st.pChip, on && st.pChipOn]}
-              onPress={() => setProp(n)}
-              activeOpacity={0.7}
-            >
-              <Text style={[st.pTxt, on && st.pTxtOn]}>{n === 'All' ? 'All properties' : n}</Text>
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
+      <ScrollView ref={scroller} style={{ flex: 1 }} contentContainerStyle={{ padding: 14, paddingBottom: 96 }}>
+        {s.props.length > 1 ? (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={st.propRow}>
+            {['All', ...s.props.map((pp) => pp.name)].map((n) => {
+              const on = n === prop;
+              return (
+                <TouchableOpacity key={n} style={[st.pChip, on && st.pChipOn]} onPress={() => setProp(n)} activeOpacity={0.7}>
+                  <Text style={[st.pTxt, on && st.pTxtOn]}>{n === 'All' ? 'All units' : unitNo(n) || n}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        ) : null}
 
-      {total + waiting.length + mine.length === 0 ? (
-        <Panel style={{ alignItems: 'center', paddingVertical: 42, marginBottom: 12 }}>
-          <Text style={st.clearMark}>✓</Text>
-          <Text style={st.clearTitle}>All clear</Text>
-          <Text style={st.clearSub}>
-            No check-ins, departures, reviews, IDs, payments or stock need attention
-            {prop !== 'All' ? ' for ' + prop : ''} right now.
-          </Text>
-        </Panel>
-      ) : (
+        <Text style={st.hello}>{hello}</Text>
         <Text style={st.lede}>
-          {total + waiting.length + mine.length} thing{total + waiting.length + mine.length === 1 ? '' : 's'} need attention
-          {prop !== 'All' ? ' · ' + prop : ''}
+          {needs.length + (moves.length ? 1 : 0) === 0 ? 'All clear. Nothing needs you right now.'
+            : [moves.length ? moves.length + ' movement' + (moves.length === 1 ? '' : 's') + ' today' : '', needs.length ? needs.length + ' queue' + (needs.length === 1 ? '' : 's') + ' need you' : ''].filter(Boolean).join(' · ')}
         </Text>
-      )}
-      <View style={st.grid}>
-        {waiting.length ? (
-          <TileCard
-            key="apr" k="apr" n={waiting.length}
-            title={waiting.length === 1 ? 'Approval needed' : 'Approvals needed'}
-            sub={aprSub}
-            accent={{ line: C.blue2, bg: C.amberbg, ink: C.blue2 }}
-            onPress={s.openApprovals}
-          />
-        ) : null}
-        {mine.length ? (
-          <TileCard
-            key="mine" k="mine" n={mine.length}
-            title="Waiting for approval"
-            sub={mineSub}
-            accent={{ line: C.amber, bg: C.amberbg, ink: C.amber }}
-            onPress={() => s.openMyRequests()}
-          />
-        ) : null}
-        {live.map((k) => (
-          <TileCard
-            key={k} k={k} n={count[k]} title={TITLE[k]} sub={preview[k]}
-            onPress={() => setPage(k)}
-          />
-        ))}
-      </View>
-    </ScrollView>
-    <Fab onPress={() => setForm({ task: null })} />
-    </View>
-  );
-}
 
-/* ── website enquiry ─────────────────────────────────────────────────────── */
-const ENQ_LABEL: Record<EnquiryStatus, string> = { new: 'New', contacted: 'Contacted', booked: 'Booked', closed: 'Closed' };
+        {/* ── Today ── */}
+        <View style={st.todayCard}>
+          <View style={st.todayHead}>
+            <View style={{ flex: 1 }}>
+              <Text style={st.kick}>TODAY</Text>
+              <Text style={st.todayDate}>{WD[now.getDay()]}, {ciFmtDay(now)}</Text>
+            </View>
+            <TouchableOpacity onPress={() => s.setTab('cal')} hitSlop={8}><Text style={st.headLink}>Calendar ›</Text></TouchableOpacity>
+          </View>
+          <View style={st.stats}>
+            <Stat n={count.ci} label="Arriving" ink={C.green} onPress={() => setPage('ci')} />
+            <Stat n={count.co} label="Leaving" ink={G.gold3} onPress={() => setPage('co')} />
+            <Stat n={inHouse} label="Staying on" ink={C.sky} onPress={() => s.setTab('cal')} />
+          </View>
+          {moves.length ? (
+            <View style={{ marginTop: 6 }}>
+              {moves.slice(0, MOVES_SHOWN).map(({ x, kind, t }, i) => {
+                const idx = idByRow[x.row];
+                return (
+                  <TouchableOpacity key={kind + x.row} style={[st.move, i === 0 && { borderTopWidth: 0 }]} onPress={() => openBooking(x.row)} activeOpacity={0.7}>
+                    <View style={st.moveTime}>
+                      <Text style={[st.moveKind, { color: kind === 'in' ? C.green : G.gold3 }]}>{kind === 'in' ? 'IN' : 'OUT'}</Text>
+                      <Text style={[st.moveT, !t && { color: C.muted }]}>{t || '—'}</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={st.moveName} numberOfLines={1}>{nameOf(x)}</Text>
+                      <Text style={st.moveSub} numberOfLines={1}>{unitOf(x.card)}{x.card.channel ? ' · ' + x.card.channel : ''}{x.card.guests ? ' · ' + x.card.guests + ' guest' + (x.card.guests === 1 ? '' : 's') : ''}</Text>
+                    </View>
+                    {kind === 'in' && idx ? <Tag text="No ID" tone="bad" /> : null}
+                    {x.card.pending > 0 ? <Tag text={inr(x.card.pending)} tone="bad" /> : null}
+                    <Text style={st.chev}>›</Text>
+                  </TouchableOpacity>
+                );
+              })}
+              {moves.length > MOVES_SHOWN ? (
+                <TouchableOpacity onPress={() => setPage(count.ci >= count.co ? 'ci' : 'co')} style={st.moreBtn}>
+                  <Text style={st.headLink}>+{moves.length - MOVES_SHOWN} more today</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          ) : <Text style={st.quiet}>No arrivals or departures today.</Text>}
+        </View>
 
-/* A guest who asked, from the website. Call and WhatsApp are the first things
-   you do with a lead, so they sit on the card rather than behind a tap; the
-   status row below records how it went. */
-function EnquiryCard({ e, manage, onStatus }: {
-  e: EnquiryItem; manage: boolean; onStatus: (s: EnquiryStatus) => void;
-}) {
-  const digits = e.mobile.replace(/[^0-9+]/g, '');
-  /* wa.me wants the number with country code and no '+'. A bare 10-digit
-     Indian mobile gets 91 in front. */
-  const wa = (() => {
-    const d = digits.replace(/^\+/, '');
-    return d.length === 10 ? '91' + d : d;
-  })();
-  const received = (() => {
-    const d = new Date(e.received);
-    return isNaN(d.getTime()) ? e.received : ciFmtDay(d) + ', ' +
-      d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' });
-  })();
-  const stay = [e.checkIn && fmtEnquiryWhen(e.checkIn), e.checkOut && fmtEnquiryWhen(e.checkOut)].filter(Boolean).join('  →  ');
-  return (
-    <View style={st.card}>
-      <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
-        <View style={{ flex: 1 }}>
-          <Text style={st.enqName} numberOfLines={1}>{e.name}</Text>
-          <Text style={st.enqMeta} numberOfLines={1}>{[e.property, 'Received ' + received].filter(Boolean).join(' · ')}</Text>
+        {/* ── Needs you ── */}
+        {needs.length ? (
+          <>
+            <Text style={st.section}>Needs you</Text>
+            <View style={st.listCard}>
+              {needs.map((r, i) => (
+                <TouchableOpacity key={r.key} style={[st.need, i === needs.length - 1 && { borderBottomWidth: 0 }]} onPress={r.onPress} activeOpacity={0.7}>
+                  <View style={[st.needN, { backgroundColor: r.tone.bg }]}>
+                    <Text style={[st.needNTxt, { color: r.tone.ink }]} numberOfLines={1} adjustsFontSizeToFit>{r.n}</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={st.needTitle}>{r.title}</Text>
+                    <Text style={st.needSub} numberOfLines={1}>{r.sub}</Text>
+                  </View>
+                  <Text style={st.chev}>›</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </>
+        ) : (
+          <View style={st.clear}>
+            <Text style={st.clearMark}>✓</Text>
+            <Text style={st.clearTitle}>Nothing waiting on you</Text>
+            <Text style={st.clearSub}>IDs, payments, reviews, enquiries and stock are all up to date{prop !== 'All' ? ' for ' + prop : ''}.</Text>
+          </View>
+        )}
+
+        {/* ── Coming up ── */}
+        <View style={st.sectionRow}>
+          <Text style={[st.section, { flex: 1, marginTop: 0, marginBottom: 0 }]}>Coming up</Text>
+          {ci.upcoming.length ? <TouchableOpacity onPress={() => setPage('up')} hitSlop={8}><Text style={st.headLink}>All {ci.upcoming.length} ›</Text></TouchableOpacity> : null}
         </View>
-        <View style={[st.enqPill, e.status === 'new' && st.enqPillNew]}>
-          <Text style={[st.enqPillTxt, e.status === 'new' && { color: '#fff' }]}>{ENQ_LABEL[e.status]}</Text>
+        {soon.length ? (
+          <View style={st.listCard}>
+            {soon.slice(0, 5).map((x, i) => (
+              <TouchableOpacity key={'s' + x.row} style={[st.need, i === Math.min(5, soon.length) - 1 && { borderBottomWidth: 0 }]} onPress={() => openBooking(x.row)} activeOpacity={0.7}>
+                <View style={st.dateBox}>
+                  <Text style={st.dateWd}>{WD[x.date.getDay()].toUpperCase()}</Text>
+                  <Text style={st.dateD}>{x.date.getDate()}</Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={st.needTitle} numberOfLines={1}>{nameOf(x)}</Text>
+                  <Text style={st.needSub} numberOfLines={1}>{unitOf(x.card)} · {x.card.nights === null ? 'stay' : x.card.nights === 0 ? 'day use' : x.card.nights + ' night' + (x.card.nights === 1 ? '' : 's')}{x.card.channel ? ' · ' + x.card.channel : ''}</Text>
+                </View>
+                {idByRow[x.row] ? <Tag text="No ID" tone="bad" /> : null}
+                <Text style={st.chev}>›</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        ) : <Text style={[st.quiet, { paddingHorizontal: 4 }]}>No arrivals in the next 7 days.</Text>}
+
+        {/* ── Lists you keep ── */}
+        <Text style={st.section}>Lists</Text>
+        <View style={st.listCard}>
+          <ListLink title="To-do list" sub={tasks.open.length ? tasks.open.length + ' open' + (tasks.due.length ? ' · ' + tasks.due.length + ' due' : '') : 'Nothing open'} onPress={() => setPage('act')} last={!enq.all.length} />
+          {enq.all.length ? <ListLink title="Website enquiries" sub={enq.all.length + ' total · ' + enq.fresh.length + ' new'} onPress={() => setPage('enq')} last /> : null}
         </View>
-      </View>
-      <Text style={st.enqStay}>{stay || 'Dates not given'}</Text>
-      <View style={st.enqGrid}>
-        <Field label="Guests" value={e.guests ? String(e.guests) : '—'} />
-        <Field label="Mobile" value={e.mobile} lines={2} />
-        {e.referral ? <Field label="Heard via" value={e.referral} lines={3} /> : null}
-      </View>
-      {e.message ? <Text style={st.enqMsg}>“{e.message}”</Text> : null}
-      <View style={st.btnRow}>
-        <TouchableOpacity style={st.act} onPress={() => Linking.openURL('tel:' + digits)} activeOpacity={0.7}>
-          <Text style={st.actTxt}>Call</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={st.act} onPress={() => Linking.openURL('https://wa.me/' + wa)} activeOpacity={0.7}>
-          <Text style={st.actTxt}>WhatsApp</Text>
-        </TouchableOpacity>
-      </View>
+      </ScrollView>
       {manage ? (
-        <View style={st.btnRow}>
-          {(['contacted', 'booked', 'closed'] as const).filter((k) => k !== e.status).map((k) => (
-            <TouchableOpacity key={k} style={[st.act, k === 'booked' && st.actOk]} onPress={() => onStatus(k)} activeOpacity={0.7}>
-              <Text style={[st.actTxt, k === 'booked' && { color: '#fff' }, k === 'closed' && { color: C.muted }]}>
-                {k === 'contacted' ? 'Contacted' : k === 'booked' ? 'Booked' : 'Close'}
-              </Text>
-            </TouchableOpacity>
-          ))}
-          {e.status !== 'new' ? (
-            <TouchableOpacity style={st.act} onPress={() => onStatus('new')} activeOpacity={0.7}>
-              <Text style={[st.actTxt, { color: C.muted }]}>Reopen</Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
+        <TouchableOpacity style={st.fab} onPress={() => setForm({ task: null })} activeOpacity={0.85} accessibilityLabel="Add a to-do">
+          <Text style={st.fabTxt}>+  To-do</Text>
+        </TouchableOpacity>
       ) : null}
     </View>
   );
 }
 
-/* The + that files a new action. Sits above the tab bar rather than in the
-   scroll, so it is reachable from anywhere in a long list of queues. */
-function Fab({ onPress }: { onPress: () => void }) {
+/* ── pieces ─────────────────────────────────────────────────────────────── */
+const ENQ_LABEL: Record<EnquiryStatus, string> = { new: 'New', contacted: 'Contacted', booked: 'Booked', closed: 'Closed' };
+
+function groupByDay(list: CiItem[]) {
+  const out: { key: string; date: Date; items: CiItem[] }[] = [];
+  list.forEach((x) => {
+    const k = String(dayStart(x.date));
+    let g = out.find((o) => o.key === k);
+    if (!g) { g = { key: k, date: x.date, items: [] }; out.push(g); }
+    g.items.push(x);
+  });
+  return out;
+}
+
+function Stat({ n, label, ink, onPress }: { n: number; label: string; ink: string; onPress: () => void }) {
   return (
-    <TouchableOpacity
-      style={st.fab} onPress={onPress} activeOpacity={0.85}
-      accessibilityRole="button" accessibilityLabel="Add an action"
-    >
-      <Text style={st.fabTxt}>+</Text>
+    <TouchableOpacity style={st.stat} onPress={onPress} activeOpacity={0.7}>
+      <Text style={[st.statN, { color: n ? ink : C.muted }]}>{n}</Text>
+      <Text style={st.statL}>{label}</Text>
     </TouchableOpacity>
   );
 }
 
-/* One action. The tick is its own hit area, deliberately: the rest of the card
-   opens the editor, and a checkbox that also navigates is a checkbox nobody
-   trusts. */
-function TaskCard({ t, req, onToggle, onEdit }: {
-  t: TaskItem; onToggle: () => void; onEdit: () => void;
-  /* A request waiting on this action. The tick box cannot move until it is
-     approved, so the card says which request is holding it. */
-  req?: Ticket | null;
-}) {
-  const tone = t.done ? C.muted : t.state === 'overdue' ? C.red : t.state === 'today' ? C.blue2 : C.bark;
+function ListLink({ title, sub, onPress, last }: { title: string; sub: string; onPress: () => void; last?: boolean }) {
   return (
-    <View style={[st.card, t.done && st.cardDone]}>
-      <View style={st.cardHead}>
-        <TouchableOpacity onPress={onToggle} activeOpacity={0.7} hitSlop={12}>
-          <View style={[st.check, t.done && st.checkOn]}>
-            {t.done ? <Text style={st.checkMark}>✓</Text> : null}
-          </View>
-        </TouchableOpacity>
-        <TouchableOpacity style={{ flex: 1 }} onPress={onEdit} activeOpacity={0.75}>
-          <Text style={[st.taskName, t.done && st.taskNameDone]} numberOfLines={3}>{t.name}</Text>
-          <Text style={[st.cardSub, { color: tone }]} numberOfLines={1}>
-            {taskWhen(t)}{!t.done && t.endIso ? ' · ' + t.endIso : ''}
-          </Text>
-        </TouchableOpacity>
-      </View>
-      {t.desc ? (
-        <TouchableOpacity onPress={onEdit} activeOpacity={0.75}>
-          <Text style={st.taskDesc}>{t.desc}</Text>
-        </TouchableOpacity>
-      ) : null}
-      {req ? (
-        <View style={st.band}>
-          <Text style={st.bandLbl}>WAITING FOR APPROVAL</Text>
-          <Text style={st.bandTxt} numberOfLines={1}>#{req.id} · {req.approver || 'an admin'}</Text>
-        </View>
-      ) : null}
-      <View style={st.cardFoot}>
-        <Text style={st.tapHint}>
-          {req ? 'Asked for — waiting' : t.done ? 'Tick to reopen' : 'Tick when done'}
-        </Text>
-        <View style={{ flex: 1 }} />
-        <TouchableOpacity onPress={onEdit} activeOpacity={0.6} hitSlop={8}>
-          <Text style={st.link}>{t.desc ? 'Edit' : 'Add a description'} ›</Text>
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
-}
-
-const nameOf = (x: { guest: string; id: string }) => x.guest || x.id;
-
-/* ── overview tile ── */
-function TileCard({ k, n, title, sub, onPress, accent }: {
-  k: SectionKey | 'apr' | 'mine'; n: number; title: string; sub: string; onPress: () => void; accent?: Accent;
-}) {
-  const a = accent || ACCENT[k as SectionKey];
-  /* Solid white card: the tinted-glass version disappeared into the warm
-     backdrop. Colour lives on the count badge only. */
-  return (
-    <Tilt3D style={st.tile} onPress={onPress} max={7}>
-      <View style={st.tileTop}>
-        <View style={[st.tileBadge, { backgroundColor: a.bg, borderColor: a.line }]}>
-          <Text style={[st.tileN, { color: a.ink }]} numberOfLines={1} adjustsFontSizeToFit>{n}</Text>
-        </View>
-        <Text style={[st.tileChev, { color: a.ink }]}>›</Text>
-      </View>
-      <Text style={st.tileTitle} numberOfLines={2}>{title}</Text>
-      {sub ? <Text style={st.tileSub} numberOfLines={2}>{sub}</Text> : null}
-    </Tilt3D>
-  );
-}
-
-/* ── detail page header ── */
-function PageHead({ title, n, accent, scope, onBack }: {
-  title: string; n: number; accent: Accent; scope?: string; onBack: () => void;
-}) {
-  return (
-    <View style={st.head}>
-      <TouchableOpacity onPress={onBack} style={st.back} activeOpacity={0.6} hitSlop={10}>
-        <Text style={st.backTxt}>‹</Text>
-      </TouchableOpacity>
+    <TouchableOpacity style={[st.need, last && { borderBottomWidth: 0 }]} onPress={onPress} activeOpacity={0.7}>
       <View style={{ flex: 1 }}>
-        <Text style={st.headTitle} numberOfLines={1}>{title}</Text>
-        <Text style={[st.headSub, { color: accent.ink }]}>
-          {n} item{n === 1 ? '' : 's'}{scope ? ' · ' + scope : ''}
-        </Text>
+        <Text style={st.needTitle}>{title}</Text>
+        <Text style={st.needSub} numberOfLines={1}>{sub}</Text>
       </View>
+      <Text style={st.chev}>›</Text>
+    </TouchableOpacity>
+  );
+}
+
+type Flag = { text: string; tone: 'bad' | 'info' | 'ok' };
+function Tag({ text, tone }: Flag) {
+  const c = tone === 'bad' ? { bg: C.redbg, fg: C.red } : tone === 'ok' ? { bg: C.greenbg, fg: C.green } : { bg: C.amberbg, fg: G.gold3 };
+  return <View style={[st.tag, { backgroundColor: c.bg }]}><Text style={[st.tagTxt, { color: c.fg }]} numberOfLines={1}>{text}</Text></View>;
+}
+function TimePill({ t, kind }: { t: string; kind: 'in' | 'out' }) {
+  return (
+    <View style={[st.timePill, { backgroundColor: kind === 'in' ? C.greenbg : C.amberbg }]}>
+      <Text style={[st.timeTxt, { color: kind === 'in' ? C.green : G.gold3 }]}>{t}</Text>
     </View>
   );
 }
 
-/* ── detail cards ── */
-function DCard({ onPress, children }: { onPress?: () => void; children: React.ReactNode }) {
-  if (!onPress) return <View style={st.card}>{children}</View>;
+function Seg({ value, options, onChange }: { value: string; options: { key: string; label: string; n: number }[]; onChange: (k: string) => void }) {
   return (
-    <TouchableOpacity style={st.card} onPress={onPress} activeOpacity={0.75}>{children}</TouchableOpacity>
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={st.segRow}>
+      {options.map((o) => {
+        const on = o.key === value;
+        return (
+          <TouchableOpacity key={o.key} style={[st.segBtn, on && st.segOn]} onPress={() => onChange(o.key)} activeOpacity={0.75}>
+            <Text style={[st.segTxt, on && st.segTxtOn]}>{o.label}{o.n ? '  ' + o.n : ''}</Text>
+          </TouchableOpacity>
+        );
+      })}
+    </ScrollView>
   );
 }
 
-function Field({ label, value, tone, lines = 1 }: { label: string; value: string; tone?: string; lines?: number }) {
+function Empty({ title, sub, cta }: { title: string; sub?: string; cta?: { label: string; onPress: () => void } }) {
   return (
-    <View style={st.field}>
-      <Text style={st.fieldLbl}>{label}</Text>
-      <Text style={[st.fieldVal, tone ? { color: tone } : null]} numberOfLines={lines}>{value || '—'}</Text>
+    <View style={st.clear}>
+      <Text style={st.clearMark}>✓</Text>
+      <Text style={st.clearTitle}>{title}</Text>
+      {sub ? <Text style={st.clearSub}>{sub}</Text> : null}
+      {cta ? <View style={{ marginTop: 14 }}><Btn title={cta.label} onPress={cta.onPress} /></View> : null}
     </View>
   );
 }
 
-/* ── the booking card ────────────────────────────────────────────────────────
-   One card, five queues. Every Action list is looking at the same thing — a
-   booking — so the skeleton never changes: avatar and name, the two pills that
-   say which flat, the source chip, the stay strip, then three fields and a
-   footer. What changes per queue is only which end of the stay is emphasised,
-   which three fields are worth the space, and what you can do from it.
-
-   Keeping them literally the same component is the point. When each queue had
-   its own card they drifted — one showed the unit, another the booking id, a
-   third neither — and the same booking looked like a different record depending
-   on which list you reached it from. */
-
-type CardField = { label: string; value: string; tone?: string; big?: boolean };
-
-function BookingCard({
-  c, pin, docId, emphasis, sub, fields, band, right, actions, hint,
-  selectable, selected, onToggle, onPress, onOpen, openLabel,
-}: {
-  c: CardData;
-  pin: string;
-  docId?: number;
-  emphasis: 'in' | 'out' | 'none';   // which end of the stay leads
-  sub?: string;                       // line under the guest name
-  fields: CardField[];                // exactly what this queue needs
-  band?: { label: string; text: string };
-  right?: React.ReactNode;
-  actions?: React.ReactNode;
-  hint?: string;
-  selectable?: boolean;
-  selected?: boolean;
-  onToggle?: () => void;
-  onPress?: () => void;               // tapping the body
-  onOpen?: () => void;                // the footer link
-  openLabel?: string;
+/* ── the booking row, shared by every booking queue ──────────────────────
+   Name and unit first (who, and which door), the stay on one line with the
+   end this queue cares about in bold, the problems as tags, then the buttons
+   that clear them. Nothing that is not known is printed. */
+type Btnish = { label: string; onPress: () => void; solid?: boolean; quiet?: boolean };
+function BRow({ c, pin, docId, focus, right, note, noteTone, flags, actions, primary, buttons, wait, select, onPress, onOpen }: {
+  c: CardData; pin: string; docId?: number; focus: 'in' | 'out' | 'none';
+  right?: React.ReactNode; note?: string; noteTone?: string; flags: Flag[];
+  actions?: Btnish[]; primary?: Btnish; buttons?: Btnish[]; wait?: string;
+  select?: boolean; onPress: () => void; onOpen?: () => void;
 }) {
-  const body = (
-    <>
-      <View style={st.cardHead}>
-        {selectable ? (
-          <View style={[st.check, selected && st.checkOn]}>
-            {selected ? <Text style={st.checkMark}>✓</Text> : null}
-          </View>
-        ) : null}
-        <GuestAvatar name={c.guest || 'Guest'} pin={pin} docId={docId} />
-        <View style={{ flex: 1 }}>
-          <Text style={st.cardTitle} numberOfLines={1}>{c.guest || 'Guest'}</Text>
-          <Text style={st.cardSub} numberOfLines={1}>
-            {sub || (c.type || 'Stay') + (c.guests ? ' · ' + c.guests + ' guests' : '')}
-          </Text>
-        </View>
-        {right}
-      </View>
-
-      {/* Booked under vs slept in: guests are regularly moved between flats, and
-          both answers matter — one is what they were sold, the other is where to
-          go knocking. */}
-      <View style={st.pills}>
-        <View style={st.pillA}>
-          <Text style={st.pillLbl}>BOOKING</Text>
-          <Text style={st.pillTxt} numberOfLines={1}>{c.prop || '—'}</Text>
-        </View>
-        <View style={st.pillB}>
-          <Text style={st.pillLblB}>STAY UNIT</Text>
-          <Text style={st.pillTxtB} numberOfLines={1}>{c.unit || '—'}</Text>
-        </View>
-        {c.channel ? (
-          <View style={st.srcChipSm}><Text style={st.srcTxtSm}>{c.channel}</Text></View>
-        ) : null}
-      </View>
-
-      {band ? (
-        <View style={st.band}>
-          <Text style={st.bandLbl}>{band.label}</Text>
-          <Text style={st.bandTxt} numberOfLines={1}>{band.text}</Text>
-        </View>
-      ) : null}
-
-      <View style={st.stayBox}>
-        <View style={st.stayHalf}>
-          <Text style={[st.stayLbl, emphasis === 'in' && st.stayLblOn]}>CHECK-IN</Text>
-          <Text style={[st.stayDate, emphasis === 'in' && st.stayDateOn]}>
-            {c.inD ? ciFmtDay(c.inD) : '—'}
-          </Text>
-          <Text style={st.stayTime}>{c.inT || 'time not recorded'}</Text>
-        </View>
-        <View style={st.stayArrow}>
-          <Text style={st.stayArrowTxt}>{c.nights !== null ? c.nights + 'n' : '→'}</Text>
-        </View>
-        <View style={st.stayHalf}>
-          <Text style={[st.stayLbl, emphasis === 'out' && st.stayLblOn]}>CHECK-OUT</Text>
-          <Text style={[st.stayDate, emphasis === 'out' && st.stayDateOn]}>
-            {c.outD ? ciFmtDay(c.outD) : '—'}
-          </Text>
-          <Text style={st.stayTime}>{c.outT || 'time not recorded'}</Text>
-        </View>
-      </View>
-
-      <View style={st.fields}>
-        {fields.map((f, i) => (
-          <View key={i} style={st.field}>
-            <Text style={st.fieldLbl}>{f.label}</Text>
-            <Text
-              style={[f.big ? st.fieldBig : st.fieldVal, f.tone ? { color: f.tone } : null]}
-              numberOfLines={1}
-            >
-              {f.value || '—'}
-            </Text>
-          </View>
-        ))}
-      </View>
-    </>
-  );
-
-  const tap = onToggle || onPress;
+  const inS = c.inD ? relDay(c.inD) : '';
+  const outS = c.outD ? relDay(c.outD) : '';
+  const nights = c.nights !== null ? (c.nights === 0 ? 'day use' : c.nights + 'n') : '';
+  const meta = [unitOf(c), c.channel, c.guests ? c.guests + ' guest' + (c.guests === 1 ? '' : 's') : ''].filter(Boolean).join(' · ');
+  const btns: Btnish[] = [...(actions || []), ...(buttons || []), ...(primary ? [{ ...primary, solid: true }] : [])];
   return (
-    <View style={[st.card, selected && st.cardOn]}>
-      {tap ? (
-        <TouchableOpacity activeOpacity={0.75} onPress={tap}>{body}</TouchableOpacity>
-      ) : body}
-
-      {actions}
-
-      {hint || onOpen ? (
-        <View style={st.cardFoot}>
-          {hint ? <Text style={st.tapHint}>{hint}</Text> : null}
-          <View style={{ flex: 1 }} />
-          {onOpen ? (
-            <TouchableOpacity onPress={onOpen} activeOpacity={0.6} hitSlop={8}>
-              <Text style={st.link}>{openLabel || 'Open booking'} ›</Text>
-            </TouchableOpacity>
+    <View style={[st.row, select && st.rowOn]}>
+      <TouchableOpacity onPress={onPress} activeOpacity={0.75}>
+        <View style={st.rowHead}>
+          {select !== undefined ? (
+            <View style={[st.check, select && st.checkOn]}>{select ? <Text style={st.checkMark}>✓</Text> : null}</View>
           ) : null}
+          <Avatar name={c.guest || 'Guest'} pin={pin} docId={docId} />
+          <View style={{ flex: 1 }}>
+            <Text style={st.rowName} numberOfLines={1}>{c.guest || c.id || 'Guest'}</Text>
+            <Text style={st.rowMeta} numberOfLines={1}>{meta}</Text>
+          </View>
+          {right}
+        </View>
+        {inS || outS ? (
+          <Text style={st.stay} numberOfLines={1}>
+            <Text style={focus === 'in' ? st.stayOn : undefined}>{inS || '—'}{c.inT ? ' ' + c.inT : ''}</Text>
+            <Text style={st.stayArrow}>{'  →  '}</Text>
+            <Text style={focus === 'out' ? st.stayOn : undefined}>{outS || '—'}{c.outT ? ' ' + c.outT : ''}</Text>
+            {nights ? <Text style={st.stayN}>{'   ' + nights}</Text> : null}
+          </Text>
+        ) : null}
+        {note ? <Text style={[st.note, noteTone ? { color: noteTone } : null]} numberOfLines={2}>{note}</Text> : null}
+        {flags.length || wait ? (
+          <View style={st.tags}>
+            {wait ? <Tag text={'Waiting for approval · ' + wait} tone="info" /> : null}
+            {flags.map((f, i) => <Tag key={i} {...f} />)}
+          </View>
+        ) : null}
+      </TouchableOpacity>
+      {btns.length || onOpen ? (
+        <View style={st.btnRow}>
+          {btns.map((x, i) => (
+            <TouchableOpacity key={i} onPress={x.onPress} activeOpacity={0.7} style={[st.act, x.solid && st.actSolid]}>
+              <Text style={[st.actTxt, x.solid && { color: '#fff' }, x.quiet && { color: C.muted }]}>{x.label}</Text>
+            </TouchableOpacity>
+          ))}
+          <View style={{ flex: 1 }} />
+          {onOpen ? <TouchableOpacity onPress={onOpen} hitSlop={8}><Text style={st.headLink}>Booking ›</Text></TouchableOpacity> : null}
         </View>
       ) : null}
     </View>
   );
 }
 
-/* Guest photo from the uploaded ID document, falling back to the initial.
-   The image is streamed through the Worker behind the PIN — an identity
-   document never sits on a public URL — and a failed load silently returns to
-   the initial rather than leaving a broken frame on the card. */
-function GuestAvatar({ name, pin, docId }: { name: string; pin: string; docId?: number }) {
+function Avatar({ name, pin, docId }: { name: string; pin: string; docId?: number }) {
   const [failed, setFailed] = useState(false);
-  const initial = (name || '?').trim().slice(0, 1).toUpperCase();
   if (docId && !failed) {
-    return (
-      <Image
-        source={{ uri: api.attachmentUrl(pin, docId) }}
-        style={st.avatarImg}
-        onError={() => setFailed(true)}
-      />
-    );
+    return <Image source={{ uri: api.attachmentUrl(pin, docId) }} style={st.avatar} onError={() => setFailed(true)} />;
   }
+  return <View style={st.avatar}><Text style={st.avatarTxt}>{(name || '?').trim().slice(0, 1).toUpperCase()}</Text></View>;
+}
+
+function TaskRow({ t, req, onToggle, onEdit, last }: { t: TaskItem; req?: Ticket | null; onToggle: () => void; onEdit: () => void; last?: boolean }) {
+  const tone = t.done ? C.muted : t.state === 'overdue' ? C.red : t.state === 'today' ? G.gold3 : C.bark;
   return (
-    <View style={st.avatar}><Text style={st.avatarTxt}>{initial}</Text></View>
+    <View style={[st.task, last && { borderBottomWidth: 0 }]}>
+      <TouchableOpacity onPress={onToggle} hitSlop={12} activeOpacity={0.7} accessibilityRole="checkbox" accessibilityState={{ checked: t.done }}>
+        <View style={[st.check, st.checkRound, t.done && st.checkOn]}>{t.done ? <Text style={st.checkMark}>✓</Text> : null}</View>
+      </TouchableOpacity>
+      <TouchableOpacity style={{ flex: 1 }} onPress={onEdit} activeOpacity={0.75}>
+        <Text style={[st.taskName, t.done && st.taskDone]} numberOfLines={2}>{t.name}</Text>
+        {t.desc ? <Text style={st.taskDesc} numberOfLines={2}>{t.desc}</Text> : null}
+        <Text style={[st.taskWhen, { color: tone }]}>{req ? 'Waiting for approval · #' + req.id : taskWhen(t)}</Text>
+      </TouchableOpacity>
+    </View>
   );
 }
 
-/* Money is what a stay card leads with once the dates are shown, except where
-   the queue exists for another reason entirely. */
-function moneyFields(c: CardData): CardField[] {
-  const totalIsPaid = c.paid > 0;
-  return [
-    { label: totalIsPaid ? 'Total paid' : 'List price', value: totalIsPaid ? inr(c.paid) : (c.listPrice ? inr(c.listPrice) : '') },
-    { label: 'Net earning', value: inr(c.net), tone: C.green },
-    { label: 'Due', value: c.pending > 0 ? inr(c.pending) : '—', tone: c.pending > 0 ? C.red : C.muted },
-  ];
+function LowRow({ i, onAdd }: { i: LowItem; onAdd: () => void }) {
+  const goal = i.required || (i.reorder !== '' ? Number(i.reorder) * 2 : 0) || Math.max(1, i.inStock);
+  const p = Math.max(0, Math.min(1, i.inStock / goal));
+  const when = i.outNow ? 'Out of stock'
+    : i.runOut ? (i.estimated ? 'About ' : '') + (i.daysLeft !== null ? i.daysLeft + ' day' + (i.daysLeft === 1 ? '' : 's') + ' left' : 'runs out ' + ciFmtDay(i.runOut))
+      : 'Running low';
+  return (
+    <View style={st.row}>
+      <View style={st.rowHead}>
+        <View style={{ flex: 1 }}>
+          <Text style={st.rowName} numberOfLines={1}>{i.item}</Text>
+          <Text style={st.rowMeta} numberOfLines={1}>{[unitNo(i.property) || i.property, i.category].filter(Boolean).join(' · ')}</Text>
+        </View>
+        <Text style={[st.count, i.outNow && st.countBad]}>{i.inStock}{i.required ? ' / ' + i.required : ''}</Text>
+      </View>
+      <View style={st.bar}><View style={[st.barFill, { width: `${Math.round(p * 100)}%` as `${number}%`, backgroundColor: i.outNow ? C.red : p < 0.5 ? C.amber : C.green }]} /></View>
+      <Text style={[st.note, i.outNow && { color: C.red }]}>{when}{i.reorder !== '' ? ' · reorder at ' + i.reorder : ''}</Text>
+      <View style={st.btnRow}>
+        <TouchableOpacity style={[st.act, st.actSolid]} onPress={onAdd} activeOpacity={0.7}><Text style={[st.actTxt, { color: '#fff' }]}>+ Add stock</Text></TouchableOpacity>
+      </View>
+    </View>
+  );
 }
 
-function LowCard({ i, onAdd }: { i: LowItem; onAdd: () => void }) {
-  /* Says plainly when it cannot project. All movement history is currently
-     "Opening Balance", so until consumption is logged there is no burn rate to
-     compute and a date here would be invented. */
-  const when = i.outNow
-    ? 'Out of stock'
-    : i.runOut
-      ? (i.estimated ? '~' : '') + 'Runs out ' + ciFmtDay(i.runOut) +
-        (i.daysLeft !== null ? ' · ' + i.daysLeft + 'd' : '')
-      : 'No booking data to project from';
+function EnquiryRow({ e, manage, onStatus }: { e: EnquiryItem; manage: boolean; onStatus: (s: EnquiryStatus) => void }) {
+  const digits = e.mobile.replace(/[^0-9+]/g, '');
+  const received = (() => {
+    const d = new Date(e.received);
+    return isNaN(d.getTime()) ? e.received : relDay(d) + ', ' + d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' });
+  })();
+  const stay = [e.checkIn && fmtEnquiryWhen(e.checkIn), e.checkOut && fmtEnquiryWhen(e.checkOut)].filter(Boolean).join('  →  ');
+  const next: EnquiryStatus[] = e.status === 'new' ? ['contacted', 'booked', 'closed'] : e.status === 'contacted' ? ['booked', 'closed'] : ['new'];
   return (
-    <View style={st.card}>
-      <View style={st.cardHead}>
-        <Text style={st.cardTitle} numberOfLines={1}>{i.item}</Text>
-        <Text style={[st.tag, i.inStock > 0 && st.tagPart]}>
-          {i.inStock}{i.required ? ' / ' + i.required : ' left'}
-        </Text>
+    <View style={st.row}>
+      <View style={st.rowHead}>
+        <View style={st.avatar}><Text style={st.avatarTxt}>{(e.name || '?').trim().slice(0, 1).toUpperCase()}</Text></View>
+        <View style={{ flex: 1 }}>
+          <Text style={st.rowName} numberOfLines={1}>{e.name}</Text>
+          <Text style={st.rowMeta} numberOfLines={1}>{[e.property ? unitNo(e.property) || e.property : '', e.guests ? e.guests + ' guests' : '', received].filter(Boolean).join(' · ')}</Text>
+        </View>
       </View>
-      <Text style={st.cardSub} numberOfLines={1}>
-        {i.id}{i.property ? ' · ' + i.property : ''}
-      </Text>
-      <View style={st.fields}>
-        <Field label="In stock" value={String(i.inStock)} tone={i.outNow ? C.red : C.ink} />
-        <Field label="Reorder at" value={i.reorder !== '' ? String(i.reorder) : ''} />
-        <Field label="Outlook" value={when} tone={i.outNow ? C.red : C.ink} />
-      </View>
-      {/* The basis is always shown, so an estimate is never mistaken for a
-          measurement. Switches to "measured" once consumption is logged. */}
-      <Text style={st.note}>{i.rateNote}{i.estimated ? ' · estimated' : ''}</Text>
+      <Text style={st.stay}>{stay || 'Dates not given'}</Text>
+      {e.message ? <Text style={st.quote} numberOfLines={3}>“{e.message}”</Text> : null}
+      {e.referral ? <Text style={st.note}>Heard via {e.referral}</Text> : null}
       <View style={st.btnRow}>
-        <TouchableOpacity style={[st.act, st.actAdd]} onPress={onAdd} activeOpacity={0.7}>
-          <Text style={[st.actTxt, { color: '#fff' }]}>+ Add stock</Text>
-        </TouchableOpacity>
+        {digits ? <TouchableOpacity style={st.act} onPress={() => Linking.openURL('tel:' + digits)}><Text style={st.actTxt}>Call</Text></TouchableOpacity> : null}
+        {digits ? <TouchableOpacity style={st.act} onPress={() => Linking.openURL('https://wa.me/' + waNumber(digits))}><Text style={st.actTxt}>WhatsApp</Text></TouchableOpacity> : null}
+        <View style={{ flex: 1 }} />
       </View>
+      {manage ? (
+        <View style={[st.btnRow, { marginTop: 8 }]}>
+          <Text style={st.moveLbl}>Mark as</Text>
+          {next.map((k) => (
+            <TouchableOpacity key={k} style={[st.act, st.actSm, k === 'booked' && st.actGreen]} onPress={() => onStatus(k)} activeOpacity={0.7}>
+              <Text style={[st.actTxt, k === 'booked' && { color: '#fff' }, k === 'closed' && { color: C.muted }]}>{k === 'new' ? 'Reopen' : ENQ_LABEL[k]}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      ) : null}
     </View>
   );
 }
 
 const st = StyleSheet.create({
-  lede: { fontFamily: F.semi, fontSize: 12.5, color: C.muted, marginBottom: 12, marginLeft: 2 },
-  propRow: { gap: 8, alignItems: 'center', paddingBottom: 12, paddingRight: 4 },
-  pChip: {
-    paddingVertical: 6, paddingHorizontal: 13, borderRadius: 999,
-    borderWidth: 1, borderColor: C.line, backgroundColor: C.card,
-  },
-  pChipOn: { backgroundColor: C.amberbg, borderColor: C.copper },
+  propRow: { gap: 7, alignItems: 'center', paddingBottom: 12, paddingRight: 4 },
+  pChip: { paddingVertical: 6, paddingHorizontal: 13, borderRadius: 999, borderWidth: 1, borderColor: C.line, backgroundColor: C.card },
+  pChipOn: { backgroundColor: C.navy, borderColor: C.navy },
   pTxt: { fontFamily: F.semi, fontSize: 12, color: C.bark },
-  pTxtOn: { color: C.blue2, fontFamily: F.bold },
+  pTxtOn: { color: '#fff', fontFamily: F.bold },
 
-  /* overview grid — two tiles per row, big enough to read at arm's length */
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
-  tile: {
-    flexGrow: 1, flexBasis: '46%', minHeight: 132,
-    borderRadius: 22, padding: 16,
-    backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: 'rgba(90,58,20,0.12)',
-    shadowColor: '#5A3A14', shadowOpacity: 0.07, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2,
-  },
-  tileTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  tileBadge: {
-    minWidth: 48, height: 48, paddingHorizontal: 10, borderRadius: 16, borderWidth: 1,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  tileN: { fontFamily: F.xbold, fontSize: 24, lineHeight: 28 },
-  tileTitle: { fontFamily: F.bold, fontSize: 15, color: C.ink, marginTop: 12 },
-  tileSub: { fontFamily: F.med, fontSize: 12, color: C.bark, marginTop: 4, lineHeight: 17 },
-  tileChev: { fontSize: 22, fontFamily: F.bold, opacity: 0.5 },
+  hello: { fontFamily: F.xbold, fontSize: 24, color: C.ink, letterSpacing: -0.5, marginLeft: 2 },
+  lede: { fontFamily: F.semi, fontSize: 13, color: C.bark, marginTop: 2, marginBottom: 14, marginLeft: 2 },
+  kick: { fontFamily: F.bold, fontSize: 10, letterSpacing: 1.4, color: G.gold2 },
+  section: { fontFamily: F.xbold, fontSize: 16, color: C.ink, marginTop: 22, marginBottom: 8, marginLeft: 2 },
+  sectionRow: { flexDirection: 'row', alignItems: 'baseline', marginTop: 22, marginBottom: 8, paddingRight: 4 },
+  headLink: { fontFamily: F.bold, fontSize: 13, color: G.gold2 },
 
-  /* detail page */
-  head: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingHorizontal: 12, paddingTop: 10, paddingBottom: 12,
-    backgroundColor: C.card, borderBottomWidth: 1, borderBottomColor: C.line,
+  todayCard: {
+    backgroundColor: '#fff', borderRadius: 22, padding: 16, borderWidth: 1, borderColor: 'rgba(90,58,20,0.10)',
+    shadowColor: G.shadow, shadowOpacity: 0.07, shadowRadius: 10, shadowOffset: { width: 0, height: 3 }, elevation: 2,
   },
-  back: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center' },
-  backTxt: { fontSize: 30, lineHeight: 32, color: C.ink, fontFamily: F.med },
-  headTitle: { fontFamily: F.xbold, fontSize: 17, color: C.ink },
-  headSub: { fontFamily: F.semi, fontSize: 12, marginTop: 1 },
+  todayHead: { flexDirection: 'row', alignItems: 'center' },
+  todayDate: { fontFamily: F.xbold, fontSize: 18, color: C.ink, marginTop: 1 },
+  stats: { flexDirection: 'row', gap: 8, marginTop: 12 },
+  stat: { flex: 1, backgroundColor: C.warm2, borderRadius: 14, paddingVertical: 10, paddingHorizontal: 12, borderWidth: 1, borderColor: C.hair },
+  statN: { fontFamily: F.xbold, fontSize: 24, lineHeight: 28 },
+  statL: { fontFamily: F.semi, fontSize: 11.5, color: C.bark, marginTop: 1 },
+  move: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 11, borderTopWidth: 1, borderTopColor: C.hair },
+  moveTime: { width: 64 },
+  moveKind: { fontFamily: F.xbold, fontSize: 9.5, letterSpacing: 0.9 },
+  moveT: { fontFamily: F.bold, fontSize: 12.5, color: C.ink, marginTop: 1 },
+  moveName: { fontFamily: F.bold, fontSize: 14.5, color: C.ink },
+  moveSub: { fontFamily: F.med, fontSize: 12, color: C.muted, marginTop: 1 },
+  moreBtn: { paddingTop: 10, alignItems: 'center', borderTopWidth: 1, borderTopColor: C.hair },
+  chev: { fontFamily: F.bold, fontSize: 20, color: '#C9C6BD', marginLeft: 2 },
+  quiet: { fontFamily: F.med, fontSize: 13, color: C.muted, paddingTop: 12 },
 
-  card: {
-    backgroundColor: C.card, borderRadius: 18, borderWidth: 1, borderColor: C.line,
-    padding: 17, marginBottom: 13,
-  },
-  cardOn: { borderColor: C.navy },
-  cardHead: { flexDirection: 'row', alignItems: 'center', gap: 11 },
-  cardTitle: { fontFamily: F.bold, fontSize: 18, color: C.ink, flex: 1 },
-  cardSub: { fontFamily: F.med, fontSize: 13, color: C.muted, marginTop: 3 },
+  listCard: { backgroundColor: '#fff', borderRadius: 18, borderWidth: 1, borderColor: 'rgba(90,58,20,0.10)', paddingHorizontal: 14, marginBottom: 4 },
+  need: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: C.hair },
+  needN: { minWidth: 38, height: 38, borderRadius: 12, paddingHorizontal: 6, alignItems: 'center', justifyContent: 'center' },
+  needNTxt: { fontFamily: F.xbold, fontSize: 16 },
+  needTitle: { fontFamily: F.bold, fontSize: 14.5, color: C.ink },
+  needSub: { fontFamily: F.med, fontSize: 12, color: C.muted, marginTop: 2 },
+  dateBox: { width: 38, alignItems: 'center', paddingVertical: 3, borderRadius: 10, backgroundColor: C.warm2, borderWidth: 1, borderColor: C.hair },
+  dateWd: { fontFamily: F.bold, fontSize: 8.5, letterSpacing: 0.6, color: C.muted },
+  dateD: { fontFamily: F.xbold, fontSize: 15, color: C.ink },
 
-  avatar: {
-    width: 48, height: 48, borderRadius: 24, backgroundColor: C.bone,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  avatarTxt: { fontFamily: F.xbold, fontSize: 19, color: C.bark },
-  avatarImg: { width: 48, height: 48, borderRadius: 24, backgroundColor: C.bone },
+  clear: { backgroundColor: '#fff', borderRadius: 18, borderWidth: 1, borderColor: C.hair, alignItems: 'center', paddingVertical: 30, paddingHorizontal: 20, marginTop: 18 },
+  clearMark: { fontSize: 26, color: C.green, fontFamily: F.bold },
+  clearTitle: { fontFamily: F.xbold, fontSize: 16, color: C.ink, marginTop: 4 },
+  clearSub: { fontFamily: F.med, fontSize: 12.5, color: C.muted, textAlign: 'center', marginTop: 5, lineHeight: 18 },
 
-  /* The unit is what you need at the door, so it is the loudest thing after the
-     name — it replaces the booking id that used to sit here. */
-  unitPill: {
-    alignItems: 'center', backgroundColor: C.navy,
-    paddingVertical: 5, paddingHorizontal: 12, borderRadius: 12,
-  },
-  unitLbl: { fontFamily: F.semi, fontSize: 8.5, color: C.copper, letterSpacing: 1 },
-  unitTxt: { fontFamily: F.xbold, fontSize: 15, color: '#fff', marginTop: 1 },
-
-  resold: {
-    flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 11,
-    backgroundColor: C.amberbg, borderRadius: 10, paddingVertical: 8, paddingHorizontal: 11,
-  },
-  resoldLbl: {
-    fontFamily: F.xbold, fontSize: 9.5, color: C.blue2, letterSpacing: 0.8,
-  },
-  resoldTxt: { fontFamily: F.bold, fontSize: 13.5, color: C.ink, flex: 1 },
-  cardHint: { fontFamily: F.semi, fontSize: 11.5, color: C.blue2, marginTop: 10 },
-  cardFoot: { flexDirection: 'row', alignItems: 'center', marginTop: 12 },
-  link: { fontFamily: F.semi, fontSize: 12, color: C.blue2 },
-  note: { fontFamily: F.med, fontSize: 11.5, color: C.bark, marginTop: 10, lineHeight: 16 },
-
-  fields: {
-    flexDirection: 'row', gap: 10, marginTop: 13,
-    borderTopWidth: 1, borderTopColor: C.hair, paddingTop: 12,
-  },
-  field: { flex: 1 },
-  fieldLbl: { fontFamily: F.med, fontSize: 10.5, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.4 },
-  fieldVal: { fontFamily: F.bold, fontSize: 15, color: C.ink, marginTop: 4 },
-  fieldBig: { fontFamily: F.xbold, fontSize: 18, color: C.ink, marginTop: 2 },
-
-  /* The receipt for a request just raised from this queue. Amber and the same
-     words as the panel on the forms, because it is the same situation. */
-  sentBox: {
-    marginHorizontal: 14, marginBottom: 4, backgroundColor: C.amberbg, borderWidth: 1, borderColor: '#e9d2a3',
-    borderRadius: 14, paddingVertical: 11, paddingHorizontal: 13,
-  },
-  sentHead: { fontFamily: F.bold, fontSize: 13, color: C.amber },
-  sentBody: { fontFamily: F.med, fontSize: 12, color: C.bark, marginTop: 5, lineHeight: 17 },
-  sentRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
-
-  /* A one-line aside for whatever this queue needs said in words: who a resale
-     went to, which documents are missing. */
-  band: {
-    flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 11,
-    backgroundColor: C.amberbg, borderRadius: 10, paddingVertical: 8, paddingHorizontal: 11,
-  },
-  bandLbl: { fontFamily: F.xbold, fontSize: 9.5, color: C.blue2, letterSpacing: 0.8 },
-  bandTxt: { fontFamily: F.bold, fontSize: 13, color: C.ink, flex: 1 },
-
-  chip: {
-    fontFamily: F.semi, fontSize: 11, color: C.bark,
-    backgroundColor: C.bone, paddingVertical: 3, paddingHorizontal: 9, borderRadius: 999,
-  },
-  tag: {
-    fontFamily: F.bold, fontSize: 12, color: C.red,
-    backgroundColor: C.redbg, paddingVertical: 5, paddingHorizontal: 10, borderRadius: 999,
-  },
-  tagPart: { color: C.navy, backgroundColor: C.bg },
-  amt: { fontFamily: F.xbold, fontSize: 17, color: C.red },
-
-  /* booking source — the platform the review has to be asked on */
-  srcChip: {
-    backgroundColor: C.navy, borderRadius: 999, paddingVertical: 6, paddingHorizontal: 13,
-  },
-  srcTxt: { fontFamily: F.xbold, fontSize: 12.5, color: '#fff' },
-
-  pills: { flexDirection: 'row', gap: 9, marginTop: 14 },
-  pillA: {
-    flex: 1, backgroundColor: C.bone, borderRadius: 12, paddingVertical: 9, paddingHorizontal: 12,
-  },
-  pillB: {
-    flex: 1, backgroundColor: C.amberbg, borderRadius: 12, paddingVertical: 9, paddingHorizontal: 12,
-    borderWidth: 1, borderColor: C.copper,
-  },
-  pillLbl: { fontFamily: F.semi, fontSize: 9, color: C.muted, letterSpacing: 0.9 },
-  pillLblB: { fontFamily: F.semi, fontSize: 9, color: C.blue2, letterSpacing: 0.9 },
-  pillTxt: { fontFamily: F.bold, fontSize: 14.5, color: C.ink, marginTop: 3 },
-  pillTxtB: { fontFamily: F.xbold, fontSize: 15.5, color: C.blue2, marginTop: 3 },
-
-  stayBox: {
-    flexDirection: 'row', alignItems: 'center', marginTop: 11,
-    backgroundColor: C.warm, borderRadius: 12, paddingVertical: 11, paddingHorizontal: 12,
-  },
-  stayHalf: { flex: 1 },
-  stayLbl: { fontFamily: F.semi, fontSize: 9, color: C.muted, letterSpacing: 0.9 },
-  /* The end of the stay this queue is about is the one that gets the colour. */
-  stayLblOn: { color: C.blue2 },
-  stayDate: { fontFamily: F.xbold, fontSize: 15, color: C.ink, marginTop: 3 },
-  stayDateOn: { color: C.blue2 },
-  stayTime: { fontFamily: F.med, fontSize: 11.5, color: C.bark, marginTop: 1 },
-  stayArrow: { paddingHorizontal: 10 },
-  stayArrowTxt: { fontFamily: F.bold, fontSize: 15, color: C.muted },
-
-  srcChipSm: {
-    justifyContent: 'center', backgroundColor: C.navy, borderRadius: 12,
-    paddingVertical: 9, paddingHorizontal: 12,
-  },
-  srcTxtSm: { fontFamily: F.bold, fontSize: 11.5, color: '#fff' },
-  dueVal: { fontFamily: F.xbold, fontSize: 18, color: C.red, marginTop: 2 },
-  tapHint: { fontFamily: F.med, fontSize: 11, color: C.muted },
-  check: {
-    width: 24, height: 24, borderRadius: 6, borderWidth: 1.6, borderColor: C.line,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  checkOn: { backgroundColor: C.navy, borderColor: C.navy },
-  checkMark: { color: '#fff', fontSize: 14, fontFamily: F.bold },
-
-  btnRow: { flexDirection: 'row', gap: 8, marginTop: 13 },
-  act: {
-    paddingVertical: 9, paddingHorizontal: 14, borderRadius: 999,
-    borderWidth: 1, borderColor: C.line, backgroundColor: '#fff',
-  },
-  actOk: { backgroundColor: C.green, borderColor: C.green },
-  actAdd: { backgroundColor: C.navy, borderColor: C.navy },
-  actTxt: { fontFamily: F.semi, fontSize: 12.5, color: C.ink },
-
-  totalBar: {
-    flexDirection: 'row', alignItems: 'flex-end',
-    backgroundColor: C.redbg, paddingHorizontal: 16, paddingVertical: 13,
-    borderBottomWidth: 1, borderBottomColor: C.line,
-  },
-  totalLbl: { fontFamily: F.semi, fontSize: 9.5, color: C.red, letterSpacing: 0.9 },
-  totalVal: { fontFamily: F.xbold, fontSize: 26, color: C.red, marginTop: 3 },
-  totalSub: { fontFamily: F.med, fontSize: 11.5, color: C.bark },
-  totalSel: { fontFamily: F.bold, fontSize: 11.5, color: C.navy, marginTop: 3 },
-
-  footer: {
-    position: 'absolute', left: 0, right: 0, bottom: 0,
-    padding: 14, backgroundColor: C.card, borderTopWidth: 1, borderTopColor: C.line,
-  },
-
-  /* actions */
   fab: {
-    position: 'absolute', right: 18, bottom: 20,
-    width: 56, height: 56, borderRadius: 28, backgroundColor: C.navy,
+    position: 'absolute', right: 16, bottom: 18, height: 46, paddingHorizontal: 18, borderRadius: 23, backgroundColor: C.navy,
     alignItems: 'center', justifyContent: 'center',
-    shadowColor: '#000', shadowOpacity: 0.22, shadowRadius: 10, shadowOffset: { width: 0, height: 4 },
-    elevation: 6,
+    shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 6,
   },
-  fabTxt: { color: '#fff', fontSize: 30, lineHeight: 34, fontFamily: F.med },
-  enqName: { fontFamily: F.bold, fontSize: 16, color: C.ink },
-  enqMeta: { fontFamily: F.med, fontSize: 12, color: C.muted, marginTop: 2 },
-  enqPill: {
-    paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999,
-    backgroundColor: C.bone, borderWidth: 1, borderColor: C.line,
-  },
-  enqPillNew: { backgroundColor: C.blue, borderColor: C.blue },
-  enqPillTxt: { fontFamily: F.bold, fontSize: 11, color: C.ink },
-  enqStay: { fontFamily: F.bold, fontSize: 14, color: C.navy, marginTop: 12 },
-  enqGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 12 },
-  enqMsg: { fontFamily: F.med, fontSize: 13, color: C.ink, lineHeight: 19, marginTop: 10, fontStyle: 'italic' },
-  groupHead: {
-    fontFamily: F.xbold, fontSize: 10.5, color: C.muted, letterSpacing: 1,
-    marginBottom: 9, marginLeft: 2,
-  },
-  cardDone: { backgroundColor: C.warm2, borderColor: C.hair },
-  taskName: { fontFamily: F.bold, fontSize: 16.5, color: C.ink, lineHeight: 22 },
-  taskNameDone: { color: C.muted, textDecorationLine: 'line-through' },
-  taskDesc: {
-    fontFamily: F.med, fontSize: 13, color: C.bark, lineHeight: 19, marginTop: 11,
-    borderTopWidth: 1, borderTopColor: C.hair, paddingTop: 11,
-  },
+  fabTxt: { color: '#fff', fontSize: 14, fontFamily: F.bold },
 
-  more: { fontFamily: F.med, fontSize: 11.5, color: C.muted, paddingTop: 4, textAlign: 'center' },
-  clearMark: { fontSize: 34, color: C.green, fontFamily: F.bold },
-  clearTitle: { fontFamily: F.xbold, fontSize: 17, color: C.ink, marginTop: 6 },
-  clearSub: {
-    fontFamily: F.med, fontSize: 12.5, color: C.muted,
-    textAlign: 'center', marginTop: 6, lineHeight: 18, paddingHorizontal: 16,
-  },
+  /* L2 */
+  head: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingTop: 12, paddingBottom: 12, backgroundColor: C.card, borderBottomWidth: 1, borderBottomColor: C.line },
+  back: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: C.bone },
+  backTxt: { fontSize: 26, lineHeight: 28, color: C.ink, fontFamily: F.bold },
+  headTitle: { fontFamily: F.xbold, fontSize: 19, color: C.ink, letterSpacing: -0.3 },
+  headSub: { fontFamily: F.semi, fontSize: 12, marginTop: 1 },
+  sumBar: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', backgroundColor: C.redbg, paddingHorizontal: 16, paddingVertical: 11 },
+  sumLbl: { fontFamily: F.bold, fontSize: 10, letterSpacing: 1, color: C.red },
+  sumVal: { fontFamily: F.xbold, fontSize: 22, color: C.red },
+  segRow: { gap: 7, paddingHorizontal: 14, paddingTop: 12 },
+  segBtn: { paddingVertical: 7, paddingHorizontal: 14, borderRadius: 999, borderWidth: 1, borderColor: C.line, backgroundColor: '#fff' },
+  segOn: { backgroundColor: C.navy, borderColor: C.navy },
+  segTxt: { fontFamily: F.semi, fontSize: 12.5, color: C.bark },
+  segTxtOn: { color: '#fff', fontFamily: F.bold },
+  groupHead: { fontFamily: F.bold, fontSize: 12, color: C.bark, marginBottom: 8, marginTop: 6, marginLeft: 2 },
+  more: { fontFamily: F.med, fontSize: 12, color: C.muted, paddingTop: 4, textAlign: 'center' },
+
+  row: { backgroundColor: '#fff', borderRadius: 16, borderWidth: 1, borderColor: 'rgba(90,58,20,0.10)', padding: 13, marginBottom: 10 },
+  rowOn: { borderColor: C.navy, borderWidth: 1.5 },
+  rowHead: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  rowName: { fontFamily: F.bold, fontSize: 15.5, color: C.ink },
+  rowMeta: { fontFamily: F.med, fontSize: 12, color: C.muted, marginTop: 1 },
+  avatar: { width: 38, height: 38, borderRadius: 19, backgroundColor: C.bone, alignItems: 'center', justifyContent: 'center' },
+  avatarTxt: { fontFamily: F.xbold, fontSize: 15, color: C.bark },
+  stay: { fontFamily: F.semi, fontSize: 12.5, color: C.bark, marginTop: 10 },
+  stayOn: { fontFamily: F.xbold, color: C.ink },
+  stayArrow: { color: C.muted },
+  stayN: { color: C.muted, fontFamily: F.med },
+  note: { fontFamily: F.med, fontSize: 12, color: C.bark, marginTop: 6, lineHeight: 17 },
+  quote: { fontFamily: F.med, fontSize: 13, color: C.ink, marginTop: 8, lineHeight: 19, fontStyle: 'italic' },
+  tags: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 9 },
+  tag: { borderRadius: 999, paddingVertical: 3, paddingHorizontal: 9, maxWidth: '100%' },
+  tagTxt: { fontFamily: F.bold, fontSize: 11 },
+  timePill: { borderRadius: 10, paddingVertical: 5, paddingHorizontal: 9 },
+  timeTxt: { fontFamily: F.xbold, fontSize: 12.5 },
+  chan: { fontFamily: F.bold, fontSize: 11.5, color: C.bark, backgroundColor: C.bone, borderRadius: 999, paddingVertical: 4, paddingHorizontal: 10, overflow: 'hidden' },
+  count: { fontFamily: F.xbold, fontSize: 13, color: C.ink, backgroundColor: C.bone, borderRadius: 999, paddingVertical: 4, paddingHorizontal: 10, overflow: 'hidden' },
+  countBad: { color: C.red, backgroundColor: C.redbg },
+  due: { fontFamily: F.xbold, fontSize: 16, color: C.red },
+  btnRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 7, marginTop: 11 },
+  act: { paddingVertical: 7, paddingHorizontal: 13, borderRadius: 999, borderWidth: 1, borderColor: C.line, backgroundColor: '#fff' },
+  actSm: { paddingVertical: 5, paddingHorizontal: 11 },
+  actSolid: { backgroundColor: C.navy, borderColor: C.navy },
+  actGreen: { backgroundColor: C.green, borderColor: C.green },
+  actTxt: { fontFamily: F.semi, fontSize: 12.5, color: C.ink },
+  moveLbl: { fontFamily: F.semi, fontSize: 11.5, color: C.muted, marginRight: 2 },
+  check: { width: 22, height: 22, borderRadius: 6, borderWidth: 1.6, borderColor: '#CFCBC1', alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff' },
+  checkRound: { borderRadius: 11 },
+  checkOn: { backgroundColor: C.navy, borderColor: C.navy },
+  checkMark: { color: '#fff', fontSize: 12, fontFamily: F.bold },
+  bar: { height: 6, borderRadius: 3, backgroundColor: C.hair, marginTop: 10, overflow: 'hidden' },
+  barFill: { height: 6, borderRadius: 3 },
+
+  task: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: C.hair },
+  taskName: { fontFamily: F.bold, fontSize: 14.5, color: C.ink, lineHeight: 20 },
+  taskDone: { color: C.muted, textDecorationLine: 'line-through' },
+  taskDesc: { fontFamily: F.med, fontSize: 12.5, color: C.bark, marginTop: 2, lineHeight: 18 },
+  taskWhen: { fontFamily: F.semi, fontSize: 11.5, marginTop: 3 },
+
+  sentBox: { marginHorizontal: 14, marginTop: 10, backgroundColor: C.amberbg, borderWidth: 1, borderColor: '#e9d2a3', borderRadius: 14, paddingVertical: 11, paddingHorizontal: 13 },
+  sentHead: { fontFamily: F.bold, fontSize: 13, color: C.amber },
+  sentBody: { fontFamily: F.med, fontSize: 12, color: C.bark, marginTop: 4, lineHeight: 17 },
+  sentRow: { flexDirection: 'row', gap: 8, marginTop: 9 },
+  footer: { position: 'absolute', left: 0, right: 0, bottom: 0, padding: 14, backgroundColor: C.card, borderTopWidth: 1, borderTopColor: C.line },
 });

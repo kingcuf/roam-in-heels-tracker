@@ -199,6 +199,7 @@ export type CardData = {
   inD: Date | null; inT: string; outD: Date | null; outT: string;
   nights: number | null;          // null when either end is missing
   bookedOn: string;
+  phone: string;
 };
 export function cardOf(o: { r: number; cells: any[] }): CardData {
   const c = o.cells;
@@ -212,6 +213,7 @@ export function cardOf(o: { r: number; cells: any[] }): CardData {
     inD, inT: ciTime(c[22]), outD, outT: ciTime(c[23]),
     nights: inD && outD ? Math.max(0, Math.round((outD.getTime() - inD.getTime()) / 86400000)) : null,
     bookedOn: String(c[0] || ''),
+    phone: String(c[13] || '').trim(),
   };
 }
 
