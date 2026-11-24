@@ -153,6 +153,18 @@ export default function ActionScreen() {
   const enq = useMemo(() => computeEnquiries(s.logs?.enquiries, prop), [s.logs, prop]);
   const tk = todayIso();
   const stayList = useMemo(() => computeStays(b, prop).stays, [b, prop]);
+  /* Who sleeps in which of our flats tonight — across all units, so each
+     unit banner at the top can say booked or free whichever one is picked. */
+  const tonightAll = useMemo(() => {
+    const set = new Set<string>();
+    computeStays(b, 'All').stays.forEach((x) => {
+      if (!(x.inK <= tk && x.outK > tk)) return;
+      const own = unitNo(x.prop) || x.prop, tail = unitNumberOf(x.prop);
+      const us = String(x.unit ?? '').split(/[,/]/).map((v) => v.trim()).filter(Boolean).map((v) => (v === x.prop || (tail && v === tail) ? own : v));
+      (us.length ? us : [own]).forEach((u) => set.add(u));
+    });
+    return set;
+  }, [b, tk]);
   const inHouse = stayList.filter((x) => x.inK < tk && x.outK > tk).length;
   /* IDs sorted by who arrives first: a missing ID for tonight is urgent, one
      for next month is not. */
@@ -495,7 +507,6 @@ export default function ActionScreen() {
      act on, and one warning line when something is at risk. Empty queues
      stay on the board as "all done" so the layout never jumps around. */
   const now = new Date();
-  const hello = now.getHours() < 12 ? 'Good morning' : now.getHours() < 17 ? 'Good afternoon' : 'Good evening';
   const outNow = low.filter((i) => i.outNow).length;
   const byTime = (k: 'in' | 'out') => (a: CiItem, c: CiItem) => mins(k === 'in' ? a.card.inT : a.card.outT) - mins(k === 'in' ? c.card.inT : c.card.outT);
   const arr = [...ci.today].sort(byTime('in'));
@@ -508,13 +519,7 @@ export default function ActionScreen() {
 
   /* Tonight: which of our flats has someone sleeping in it. */
   const ownUnits = (prop === 'All' ? s.props.map((pp) => pp.name) : [prop]).map((n) => unitNo(n) || n);
-  const tonight = new Set<string>();
-  stayList.forEach((x) => {
-    if (!(x.inK <= tk && x.outK > tk)) return;
-    const own = unitNo(x.prop) || x.prop, tail = unitNumberOf(x.prop);
-    const us = String(x.unit ?? '').split(/[,/]/).map((v) => v.trim()).filter(Boolean).map((v) => (v === x.prop || (tail && v === tail) ? own : v));
-    (us.length ? us : [own]).forEach((u) => tonight.add(u));
-  });
+  const tonight = tonightAll;
   const booked = ownUnits.filter((u) => tonight.has(u));
   const free = ownUnits.filter((u) => !tonight.has(u));
 
@@ -523,10 +528,6 @@ export default function ActionScreen() {
   const goneAmt = gone.reduce((t, p) => t + p.pending, 0);
   const revAsk = rev.filter((x) => x.status !== 'requested').length;
 
-  const lede = [
-    arr.length || dep.length ? arr.length + ' in · ' + dep.length + ' out today' : 'No check-ins or check-outs today',
-    ownUnits.length ? booked.length + ' of ' + ownUnits.length + ' booked tonight' : '',
-  ].filter(Boolean).join('  ·  ');
 
   return (
     <View style={{ flex: 1 }}>
@@ -536,16 +537,16 @@ export default function ActionScreen() {
             {['All', ...s.props.map((pp) => pp.name)].map((n) => {
               const on = n === prop;
               return (
-                <TouchableOpacity key={n} style={[st.pChip, on && st.pChipOn]} onPress={() => setProp(n)} activeOpacity={0.7}>
-                  <Text style={[st.pTxt, on && st.pTxtOn]}>{n === 'All' ? 'All units' : unitNo(n) || n}</Text>
-                </TouchableOpacity>
+                <UnitBanner key={n} name={n} on={on} onPress={() => setProp(n)}
+                  status={n === 'All'
+                    ? (() => { const all = s.props.map((pp) => unitNo(pp.name) || pp.name); const k = all.filter((u) => tonight.has(u)).length; return k + ' of ' + all.length + ' tonight'; })()
+                    : tonight.has(unitNo(n) || n) ? 'Booked' : 'Free tonight'}
+                  busy={n !== 'All' && tonight.has(unitNo(n) || n)} />
               );
             })}
           </ScrollView>
         ) : null}
 
-        <Text style={st.hello}>{hello}</Text>
-        <Text style={st.lede}>{lede}</Text>
 
         {/* Decisions waiting on you come before everything else. */}
         {waiting.length ? (
@@ -637,6 +638,25 @@ export default function ActionScreen() {
 }
 
 /* ── home pieces ────────────────────────────────────────────────────────── */
+/* The unit switcher: a small photo banner per flat, saying whether it is
+   booked tonight, so the filter row doubles as an at-a-glance status strip. */
+function UnitBanner({ name, on, onPress, status, busy }: { name: string; on: boolean; onPress: () => void; status: string; busy: boolean }) {
+  const all = name === 'All';
+  const u = all ? '' : unitNo(name) || name;
+  const cover = all ? null : coverFor(u);
+  return (
+    <TouchableOpacity onPress={onPress} activeOpacity={0.8} accessibilityRole="button" accessibilityState={{ selected: on }}
+      style={[st.ub, on && st.ubOn]}>
+      {cover ? <Image source={cover} style={StyleSheet.absoluteFill as any} resizeMode="cover" /> : null}
+      <View style={[st.ubShade, all && { backgroundColor: C.navy }]} />
+      <Text style={st.ubName} numberOfLines={1}>{all ? 'All units' : u}</Text>
+      <View style={st.ubStatus}>
+        {!all ? <View style={[st.ubDot, { backgroundColor: busy ? '#7FD3A8' : '#F2C27B' }]} /> : null}
+        <Text style={st.ubStatusTxt} numberOfLines={1}>{status}</Text>
+      </View>
+    </TouchableOpacity>
+  );
+}
 type Alert = { t: string; tone: 'bad' | 'warn' | 'ok' } | null;
 const ALERT_INK = { bad: C.red, warn: G.gold3, ok: C.green };
 function AlertLine({ t, tone }: { t: string; tone: 'bad' | 'warn' | 'ok' }) {
@@ -1108,6 +1128,13 @@ const st = StyleSheet.create({
   bannerT: { fontFamily: F.bold, fontSize: 14, color: '#fff' },
   bannerS: { fontFamily: F.semi, fontSize: 12, color: 'rgba(255,255,255,0.75)', marginTop: 1 },
   propRow: { gap: 7, alignItems: 'center', paddingBottom: 12, paddingRight: 4 },
+  ub: { width: 104, height: 58, borderRadius: 14, overflow: 'hidden', justifyContent: 'flex-end', paddingHorizontal: 10, paddingBottom: 7, backgroundColor: C.bone, borderWidth: 2, borderColor: 'transparent' },
+  ubOn: { borderColor: G.gold2 },
+  ubShade: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(15,12,10,0.30)' },
+  ubName: { fontFamily: F.xbold, fontSize: 16, color: '#fff', letterSpacing: -0.2, textShadowColor: 'rgba(0,0,0,0.55)', textShadowRadius: 6 },
+  ubStatus: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 1 },
+  ubDot: { width: 6, height: 6, borderRadius: 3 },
+  ubStatusTxt: { fontFamily: F.bold, fontSize: 10.5, color: '#fff', textShadowColor: 'rgba(0,0,0,0.6)', textShadowRadius: 5 },
   pChip: { paddingVertical: 6, paddingHorizontal: 13, borderRadius: 999, borderWidth: 1, borderColor: C.line, backgroundColor: C.card },
   pChipOn: { backgroundColor: C.navy, borderColor: C.navy },
   pTxt: { fontFamily: F.semi, fontSize: 12, color: C.bark },
