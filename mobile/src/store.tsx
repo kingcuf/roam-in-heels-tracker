@@ -73,7 +73,7 @@ export const authStore = Platform.OS === 'web'
    credentials in SecureStore, which is sized for secrets, not datasets.
    Keyed by user and wiped on sign-out, like the saved credentials. */
 const SNAP_PREFIX = 'spira_snap_v1:';
-type Snap = { at: number; me: any; rights: string[]; needsApproval: boolean; logs: any; inv: any; tickets: any; dash: any; props: any[] };
+type Snap = { at: number; me: any; rights: string[]; needsApproval: boolean; logs: any; vers?: Record<string, string>; inv: any; tickets: any; dash: any; props: any[] };
 const snapKey = (user: string) => SNAP_PREFIX + (String(user || '').trim().toLowerCase() || 'owner');
 function readSnap(user: string): Snap | null {
   if (Platform.OS !== 'web') return null;
@@ -93,6 +93,10 @@ function clearSnaps() {
     ks.forEach((k) => ls.removeItem(k));
   } catch {}
 }
+/* Blocks every screen needs, fetched on every refresh; LAZY ones join only
+   once a screen that shows them has been opened (then they stay in sync). */
+const CORE_BLOCKS = ['bookings', 'expenses', 'savings', 'tasks', 'enquiries', 'idStatus', 'idDocs', 'checklist', 'hosts'];
+export type LazyBlock = 'messages' | 'photos';
 const LOGS_STALE_MS = 15000; // E4: skip reload if logs fetched < 15 s ago
 const TICKETS_STALE_MS = 15000; // same window for the Team tab's ticket list
 
@@ -188,6 +192,8 @@ type StoreT = {
   /* The Report's own controls: only the one call that reads them. */
   refreshReport: (overrides?: { filter?: string; rangeSel?: RangeSel; rFrom?: string; rTo?: string }) => Promise<void>;
   reloadLogs: () => Promise<void>;
+  /* Ask for a lazily loaded block (messages, photos) — call when a screen that shows it opens. */
+  needLogs: (k: LazyBlock) => void;
   maybeReloadLogs: () => void;
   editB: EditB;
   setEditB: (e: EditB) => void;
@@ -331,12 +337,28 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setEditS((e) => (e ? ((r) => (r ? { ...e, cells: r.cells } : null))(find(l?.savings, e.row)) : e));
   };
 
+  /* Delta sync state: the fingerprint of each block held, the data as last
+     applied (for merging a partial reply), and which lazy blocks are on. */
+  const logVers = useRef<Record<string, string>>({});
+  const logsRef = useRef<any>(null);
+  const lazyOn = useRef<Set<string>>(new Set());
+  const wantFor = (keys: string[]) => keys.map((k) => k + ':' + (logsRef.current && logsRef.current[k] !== undefined ? logVers.current[k] || '' : '')).join(',');
+  const fetchLogsRaw = (p: string, only?: string[]) => api.getLogsDelta(p, wantFor(only || [...CORE_BLOCKS, ...lazyOn.current]));
+  /* Fold a delta reply into what is held. Returns the merged Logs. */
+  const mergeLogs = (r: any) => {
+    const next: any = { ...(logsRef.current || {}) };
+    for (const k of Object.keys(r || {})) if (k !== 'v') next[k] = r[k];
+    logVers.current = { ...logVers.current, ...(r?.v || {}) };
+    logsRef.current = next;
+    return next;
+  };
+
   /* Keep the snapshot current, a beat after things settle. */
   const userRef = useRef('');
   useEffect(() => {
     if (!loggedIn || !logs || !me) return;
     const t = setTimeout(() => writeSnap(userRef.current, {
-      at: Date.now(), me, rights, needsApproval, logs: { ...logs, idStatus: idMap || (logs as any).idStatus, idDocs: idDocs || (logs as any).idDocs },
+      at: Date.now(), me, rights, needsApproval, logs: { ...logs, idStatus: idMap || (logs as any).idStatus, idDocs: idDocs || (logs as any).idDocs }, vers: logVers.current,
       inv, tickets, dash, props,
     }), 800);
     return () => clearTimeout(t);
@@ -345,6 +367,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     rightsRef.current = sn.rights || []; setRights(sn.rights || []);
     setMe(sn.me || null); setNeedsApproval(!!sn.needsApproval);
     if (sn.logs) {
+      logsRef.current = sn.logs;
+      logVers.current = sn.vers || {};
       setLogs(sn.logs);
       if (sn.logs.idStatus) setIdMap(sn.logs.idStatus);
       if (sn.logs.idDocs) setIdDocs(sn.logs.idDocs);
@@ -353,6 +377,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     if (sn.tickets) setTickets(sn.tickets);
     if (sn.dash) setDash(sn.dash);
     if (Array.isArray(sn.props)) setProps(sn.props);
+  };
+
+  const applyLogs = (r: any) => {
+    const l = mergeLogs(r);
+    setLogs(l);
+    resyncEdits(l);
+    if (l && l.idStatus) setIdMap(l.idStatus);
+    if (l && l.idDocs) setIdDocs(l.idDocs);
+    logsFetchedAt.current = Date.now();
   };
 
   const inc = () => setBusyN((n) => n + 1);
@@ -377,7 +410,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     try {
       const [d, l, iv, pr, tk, who] = await Promise.all([
         parts.dash && report ? api.getDashboard(p, f, from, to) : Promise.resolve(null),
-        parts.logs ? api.getLogs(p) : Promise.resolve(null),
+        parts.logs ? fetchLogsRaw(p) : Promise.resolve(null),
         // inventory is non-fatal: a failure here must not blank the dashboard
         parts.inv ? fetchInv(p).catch(() => null) : Promise.resolve(null),
         parts.dash && !report ? api.getProperties(p).catch(() => null) : Promise.resolve(null),
@@ -398,11 +431,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       if (!parts.logs) return;
       // A newer logs load already landed — this response is stale, drop it.
       if (my !== logsSeq.current) return;
-      setLogs(l);
-      resyncEdits(l);
-      if (l && (l as any).idStatus) setIdMap((l as any).idStatus);
-      if (l && (l as any).idDocs) setIdDocs((l as any).idDocs);
-      logsFetchedAt.current = Date.now();
+      applyLogs(l);
     } catch (e: any) {
       toast(e?.message || 'Failed to load', false);
     } finally {
@@ -458,15 +487,22 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     const my = ++logsSeq.current;
     inc();
     try {
-      const l = await api.getLogs(pinRef.current);
+      const l = await fetchLogsRaw(pinRef.current);
       if (my !== logsSeq.current) return;   // superseded by a newer load
-      setLogs(l);
-      resyncEdits(l);
-      if (l && (l as any).idStatus) setIdMap(l.idStatus);
-      if (l && (l as any).idDocs) setIdDocs((l as any).idDocs);
-      logsFetchedAt.current = Date.now();
+      applyLogs(l);
     } catch (e: any) { toast(e?.message || 'Failed to load logs', false); }
     finally { dec(); }
+  };
+
+  /* Lazy blocks: the first screen that needs messages or photos asks for
+     them; from then on they ride along with every refresh (delta-checked). */
+  const needLogs = (k: LazyBlock) => {
+    if (lazyOn.current.has(k)) return;
+    lazyOn.current.add(k);
+    fetchLogsRaw(pinRef.current, [k]).then((r) => {
+      if (!logsRef.current) return;      // signed out meanwhile
+      setLogs(mergeLogs(r));
+    }).catch(() => { lazyOn.current.delete(k); });
   };
 
   // E4: entering the Logs tab refreshes only when stale; manual ↻ uses reloadLogs()
@@ -509,6 +545,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     authStore.deleteItemAsync(AUTH_KEY).catch(() => {});
     authStore.deleteItemAsync(PIN_KEY).catch(() => {});
     clearSnaps();
+    logsRef.current = null; logVers.current = {}; lazyOn.current = new Set();
   };
 
   /* The Add tab can land on a segment this role cannot use (the default is
@@ -574,7 +611,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     },
     props, dash, logs,
     filter, setFilter, rangeSel, setRangeSel, rFrom, setRFrom, rTo, setRTo,
-    busy: busyN > 0, refresh, refreshWrite, refreshReport, reloadLogs, maybeReloadLogs,
+    busy: busyN > 0, refresh, refreshWrite, refreshReport, reloadLogs, maybeReloadLogs, needLogs,
     /* Opening a record from anywhere picks up this user's live update request
        on it, unless the caller already passed one. */
     editB,

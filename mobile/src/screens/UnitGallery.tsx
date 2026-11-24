@@ -28,6 +28,7 @@ export default function UnitGallery() {
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const open = s.gallery !== null;
+  useEffect(() => { if (open) s.needLogs('photos'); }, [open]);
   const units = (s.props || []).filter((p) => (p.status || 'Active') !== 'Inactive');
   const prop = s.gallery || units[0]?.name || '';
   const album = (s.logs?.photos || []).find((a) => a.property === prop);

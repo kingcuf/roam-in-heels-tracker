@@ -308,7 +308,7 @@ const worker = {
         case 'addExpense':     out = await addExpense(env, pin, payload); break;
         case 'addProperty':    out = await addProperty(env, pin, payload); break;
         case 'updateProperty': out = await updateProperty(env, pin, payload); break;
-        case 'logs':           out = await getLogs(env, pin, url.origin); break;
+        case 'logs':           out = p.want !== undefined ? await getLogsDelta(env, url.origin, p.want) : await getLogs(env, pin, url.origin); break;
         case 'updateBooking':  out = await updateBooking(env, pin, row, payload); break;
         case 'updateExpense':  out = await updateExpense(env, pin, row, payload); break;
         case 'deleteBooking':  out = await deleteRowById(env, pin, 'bookings', row, 'Booking deleted'); break;
@@ -1490,6 +1490,52 @@ async function logBlock(env, table, headers, cols) {
     }))
   };
 }
+/* Delta sync. The app sends `want` = the blocks it needs, each with the
+   fingerprint of the copy it already holds ("bookings:3f2a…,tasks:,…").
+   Every wanted block is still read (D1 answers in about a millisecond), but
+   only blocks whose fingerprint changed are sent back, plus `v`, the new
+   fingerprints. After saving one booking, the reply is the bookings block —
+   not checklists, messages, photos, hosts and the rest again.
+   Messages and photos are not in the default set: the app asks for them only
+   when a screen that shows them is opened (lazy loading).
+   A row-level delta would need an updated_at column and delete tombstones,
+   i.e. a schema migration; block fingerprints need none. */
+const LOG_BLOCKS = {
+  bookings: (env) => logBlock(env, 'bookings', BOOKING_HEADERS, BOOKING_COLS),
+  expenses: (env) => logBlock(env, 'expenses', EXPENSE_HEADERS, EXPENSE_COLS),
+  savings:  (env) => logBlock(env, 'savings',  SAVING_HEADERS,  SAVING_COLS),
+  tasks:    (env) => logBlock(env, 'tasks',    TASK_HEADERS,    TASK_COLS),
+  enquiries: (env) => logBlock(env, 'enquiries', ENQUIRY_HEADERS, ENQUIRY_COLS),
+  idStatus: (env) => idStatus(env),
+  idDocs:   (env) => idDocs(env),
+  checklist: (env) => checklistData(env),
+  hosts:    (env) => hostsData(env).catch(() => undefined),
+  messages: (env) => messagesData(env).catch(() => undefined),
+  photos:   (env, origin) => photosData(env, origin).catch(() => undefined),
+};
+async function fingerprint(txt) {
+  const d = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(txt));
+  return [...new Uint8Array(d)].slice(0, 10).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+async function getLogsDelta(env, origin, want) {
+  const known = {};
+  for (const part of String(want || '').split(',')) {
+    const [k, h] = part.split(':');
+    if (k && LOG_BLOCKS[k]) known[k] = h || '';
+  }
+  const keys = Object.keys(known);
+  if (!keys.length) bad('Nothing asked for');
+  const vals = await Promise.all(keys.map((k) => LOG_BLOCKS[k](env, origin)));
+  const out = { v: {} };
+  await Promise.all(keys.map(async (k, i) => {
+    if (vals[i] === undefined) return;
+    const h = await fingerprint(JSON.stringify(vals[i]));
+    out.v[k] = h;
+    if (h !== known[k]) out[k] = vals[i];
+  }));
+  return out;
+}
+
 /* Every block is independent, so they are read concurrently: this used to be
    ~16 D1 round trips one after another, which made the app's main call the
    sum of them instead of the slowest one. */

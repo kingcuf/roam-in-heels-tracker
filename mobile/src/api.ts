@@ -20,6 +20,7 @@ const userQs = () => (API_USER ? '&user=' + encodeURIComponent(API_USER) : '');
 
 type Args = {
   pin: string;
+  want?: string;
   property?: string;
   from?: string;
   to?: string;
@@ -51,6 +52,7 @@ async function call(action: string, a: Args): Promise<any> {
      query string — so the worker read `Number(p.ticket) || 0` = 0, found no
      request to revise, and raised a second one every time. Resubmitting a
      new-record request silently duplicated it (same guest, two amounts). */
+  if (a.want !== undefined) u += '&want=' + encodeURIComponent(a.want);
   if (a.ticket) u += '&ticket=' + encodeURIComponent(String(a.ticket));
 
   const ctl = new AbortController();
@@ -133,6 +135,9 @@ export const api = {
   addProperty: (pin: string, d: any, ticket = 0) => call('addProperty', { pin, payload: d, ticket }),
   updateProperty: (pin: string, d: any) => call('updateProperty', { pin, payload: d }),
   getLogs: (pin: string) => call('logs', { pin }),
+  /* Delta sync: `want` lists blocks with the fingerprint already held; only
+     changed blocks come back, plus `v` (fresh fingerprints). See getLogsDelta. */
+  getLogsDelta: (pin: string, want: string) => call('logs', { pin, want }),
   updateBooking: (pin: string, row: number, d: any) => call('updateBooking', { pin, row, payload: d }),
   updateExpense: (pin: string, row: number, d: any) => call('updateExpense', { pin, row, payload: d }),
   deleteBooking: (pin: string, row: number) => call('deleteBooking', { pin, row }),

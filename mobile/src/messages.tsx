@@ -4,7 +4,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { C, F } from './theme';
 import { useStore } from './store';
 import { api } from './api';
-import { Btn, useToast } from './ui';
+import { Btn, Shimmer, useToast } from './ui';
 import {
   CHECKLIST_PRESETS, FACT_KEY_RE, MESSAGE_STAGES, MessageImage, MessageTemplate, UNIT_FACTS, factKeyOf, factsOf,
   guestFactsFor, messageValues, messagesFor, renderMessage, stayPropOf, varLabel, waLink,
@@ -31,6 +31,7 @@ const RECIPIENT_LABEL: Record<string, string> = { guest: 'guest', host: 'host', 
 export function BookingMessages({ row }: { row: number }) {
   const s = useStore();
   const o = (s.logs?.bookings?.rows || []).find((x) => x.r === row) || null;
+  useEffect(() => { s.needLogs('messages'); }, []);
   const data = s.logs?.messages;
   const { list, due } = useMemo(() => (o ? messagesFor(o, data) : { list: [], due: 'any' as const }), [o, data]);
   const [open, setOpen] = useState<number | null>(null);
@@ -329,6 +330,7 @@ export function MessagePhotosEditor({ existing, removed, added, onRemoveExisting
 export function UnitFactsEditor({ property }: { property: string }) {
   const s = useStore();
   const toast = useToast();
+  useEffect(() => { s.needLogs('messages'); }, []);
   const stored = useMemo(
     () => (s.logs?.messages?.facts || []).filter((f) => f.property === property),
     [s.logs, property],
@@ -342,7 +344,7 @@ export function UnitFactsEditor({ property }: { property: string }) {
   const [saving, setSaving] = useState(false);
   const [newLabel, setNewLabel] = useState('');
   useEffect(() => { setRows(initial()); }, [stored]);
-  if (!s.logs?.messages) return <Text style={st.empty}>Guest info needs the latest server — refresh in a minute.</Text>;
+  if (!s.logs?.messages) return <View style={{ gap: 10, paddingVertical: 6 }}><Shimmer w="40%" /><Shimmer h={40} /><Shimmer h={40} /></View>;
 
   const dirty = JSON.stringify(rows.map((r) => [r.key, r.value.trim()])) !== JSON.stringify(initial().map((r) => [r.key, r.value.trim()]));
   const set = (k: string, v: string) => setRows((rs) => rs.map((r) => (r.key === k ? { ...r, value: v } : r)));

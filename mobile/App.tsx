@@ -197,7 +197,7 @@ function AddContainer() {
       )}
       {/* The message library (Admin only — see store.addSegs). */}
       {s.addSegs.includes('msg') && (
-        <View style={[{ flex: 1 }, pane('msg') && st.hidden]}>{back}<MessageLibrary /></View>
+        <View style={[{ flex: 1 }, pane('msg') && st.hidden]}>{back}<MessageLibrary active={!pane('msg')} /></View>
       )}
     </View>
   );

@@ -1,9 +1,9 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { C, F } from '../theme';
 import { useStore } from '../store';
 import { api } from '../api';
-import { Btn, confirmDestructive, useToast } from '../ui';
+import { Btn, ShimmerCard, confirmDestructive, useToast } from '../ui';
 import {
   CHECKLIST_PRESETS, LINKABLE_PRESETS, MESSAGE_STAGES, MESSAGE_VARS, MessageAudience, MessageStage, MessageTemplate,
   STARTER_MESSAGES, UNIT_FACTS, ciParse, factsOf, messageValues, renderMessage, stayPropOf, varLabel,
@@ -22,16 +22,18 @@ type Draft = {
 };
 const BLANK: Draft = { title: '', body: '', stage: 'before', audience: 'guest', properties: [], preset: '' };
 
-export default function MessageLibrary() {
+/* `active`: the Add tab keeps this pane mounted while hidden; messages are
+   fetched only once it is actually shown. */
+export default function MessageLibrary({ active = true }: { active?: boolean }) {
   const s = useStore();
   const toast = useToast();
   const [draft, setDraft] = useState<Draft | null>(null);
   const [seeding, setSeeding] = useState(false);
+  useEffect(() => { if (active) s.needLogs('messages'); }, [active]);
   const data = s.logs?.messages;
   const templates = data?.templates || [];
 
-  if (!s.logs) return <View style={{ padding: 18 }}><Text style={ms.empty}>Loading…</Text></View>;
-  if (!data) return <View style={{ padding: 18 }}><Text style={ms.empty}>Messages need the latest server — refresh in a minute.</Text></View>;
+  if (!s.logs || !data) return <View style={{ padding: 18, gap: 12 }}>{[0, 1, 2, 3].map((i) => <ShimmerCard key={i} lines={3} />)}</View>;
   if (draft) return <Editor draft={draft} onClose={() => setDraft(null)} />;
 
   const seed = async () => {
