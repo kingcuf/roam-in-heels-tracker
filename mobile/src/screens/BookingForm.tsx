@@ -12,7 +12,7 @@ import { isMoneyText, moneyNum, moneyRule } from '../money';
 import { GuestNameInput, KnownGuest, useGuestDirectory } from '../guests';
 import { TouchableOpacity } from 'react-native';
 import { FormCard, FormFooter, FormHeader, FormScroll } from '../formkit';
-import { ChoiceChips, PropertyPicker } from '../propertyPicker';
+import { ChoiceChips, PropertyPicker, unitNo } from '../propertyPicker';
 import TicketBanner, { NoAdd, writeLabels } from './TicketBanner';
 
 /* 'Offline' became 'From host' (24-Nov-2026) and 'Pass' left the list — a Pass
@@ -339,6 +339,12 @@ export default function BookingForm() {
     if (deal.collectedBy === 'host') return isMoneyText(f.net) && f.net !== '' ? first + ' will owe you ' + inr(moneyNum(f.net)) + ' (your net)' : first + ' will owe you your net — fill in Net earned';
     return isMoneyText(f.commission) && f.commission !== '' ? 'You’ll owe ' + first + ' ' + inr(Math.abs(moneyNum(f.commission))) + ' (their share)' : 'You’ll owe ' + first + ' their share — fill in the Money card';
   })();
+  /* Choosing one of OUR flats: a host picked under "Came from" stays (their
+     guest, our flat); a host flat picked under Stay alone is dropped. */
+  const toOurUnit = () => {
+    setPartner(false);
+    if (deal && deal.unitId) setDeal(f.channel === 'From host' ? { ...deal, unitId: 0 } : null);
+  };
   const hostUnitsOf = (id: number) => (hostsData?.units || []).filter((u) => u.host_id === id);
   const pickHostUnit = (u: HostUnit) => {
     setDeal({ hostId: u.host_id, unitId: u.id, collectedBy: deal?.collectedBy || defaultCollector(f.channel) });
@@ -416,80 +422,14 @@ export default function BookingForm() {
       />
 
         <View onLayout={onCard('booking')}>
-        <FormCard title="Unit" step={1} i={1}>
-          <Field label="Booked on" req err={errs.property}>
-            <PropertyPicker value={f.property} options={s.props} onChange={set('property')} />
-          </Field>
-          {/* Where the guest actually sleeps. Most stays are "same unit"; the
-              other flats we own are a tap; a partner flat is typed. Same stored
-              value as before: '' = same, bare unit number or free text. */}
-          <Field label="Guest stays in">
-            <View style={st.unitChips}>
-              <TouchableOpacity accessibilityRole="radio" accessibilityState={{ selected: stayMode === 'same' }}
-                style={[st.unitChip, stayMode === 'same' && st.unitChipOn]}
-                onPress={() => { setPartner(false); set('stayUnit')(''); }}>
-                <Text style={[st.unitChipTxt, stayMode === 'same' && st.unitChipTxtOn]}>Same unit</Text>
-              </TouchableOpacity>
-              {otherUnits.map((u) => {
-                const on = stayMode === 'owned' && f.stayUnit.trim() === u.no;
-                return (
-                  <TouchableOpacity key={u.no} accessibilityRole="radio" accessibilityState={{ selected: on }}
-                    style={[st.unitChip, on && st.unitChipOn]}
-                    onPress={() => { setPartner(false); set('stayUnit')(on ? '' : u.no); }}>
-                    <Text style={[st.unitChipTxt, on && st.unitChipTxtOn]}>{u.no === u.name ? u.name : 'Unit ' + u.no}</Text>
-                  </TouchableOpacity>
-                );
-              })}
-              <TouchableOpacity accessibilityRole="radio" accessibilityState={{ selected: stayMode === 'partner' }}
-                style={[st.unitChip, stayMode === 'partner' && st.unitChipOn]}
-                onPress={() => { if (stayMode !== 'partner') { setPartner(true); set('stayUnit')(''); setDeal(null); setFromHost(false); } }}>
-                <Text style={[st.unitChipTxt, stayMode === 'partner' && st.unitChipTxtOn]}>Host’s flat…</Text>
-              </TouchableOpacity>
-            </View>
-            {stayMode === 'partner' && dealUnit ? (
-              <View style={st.picked}>
-                <Text style={st.pickedT}>{'Unit ' + dealUnit.unit + (dealUnit.building ? ' · ' + dealUnit.building : '')}</Text>
-                <Text style={st.pickedS}>{'Host: ' + (dealHost?.name || '')}</Text>
-                <TouchableOpacity onPress={() => { setDeal(null); setPartner(true); set('stayUnit')(''); }} hitSlop={8} style={st.pickedX}><Text style={st.link}>Change</Text></TouchableOpacity>
-              </View>
-            ) : stayMode === 'partner' ? (
-              <HostUnitPick data={hostsData} typed={f.stayUnit} onPick={pickHostUnit} onType={set('stayUnit')} />
-            ) : null}
-          </Field>
-          {/* Their guest → our flat: the host is the link, the unit is ours. */}
-          {stayMode !== 'partner' && f.channel !== 'From host' ? (
-            deal && dealHost ? (
-              <View style={st.picked}>
-                <Text style={st.pickedT}>{'Guest came from ' + dealHost.name}</Text>
-                <Text style={st.pickedS}>Their guest, in our flat</Text>
-                <TouchableOpacity onPress={() => setDeal(null)} hitSlop={8} style={st.pickedX}><Text style={st.link}>Remove</Text></TouchableOpacity>
-              </View>
-            ) : fromHost ? (
-              <HostPick data={hostsData} onPick={(h) => { setDeal({ hostId: h.id, unitId: 0, collectedBy: defaultCollector(f.channel) }); setFromHost(false); }} onCancel={() => setFromHost(false)} />
-            ) : (
-              <TouchableOpacity onPress={() => setFromHost(true)} hitSlop={6} style={{ alignSelf: 'flex-start', marginTop: -2, marginBottom: 6 }}>
-                <Text style={st.link}>+ Guest came from another host</Text>
-              </TouchableOpacity>
-            )
-          ) : null}
-          {deal && dealHost ? (
-            <Field label="Who collected the guest’s money?">
-              <ChoiceChips value={deal.collectedBy === 'host' ? dealHost.name.split(' ')[0] : 'We did'}
-                options={[dealHost.name.split(' ')[0], 'We did']}
-                onChange={(v) => setDeal({ ...deal, collectedBy: v === 'We did' ? 'us' : 'host' })} />
-              <Text style={st.dealLine}>{dealLine}</Text>
-            </Field>
-          ) : null}
-        </FormCard>
-        </View>
-
-        <FormCard title="Booking" step={2} i={2}>
+        {/* 1 · The booking: what it is, where it came from, which of our units it was booked for. */}
+        <FormCard title="Booking" step={1} i={1}>
           <Field label="Booking type" req>
             <ChoiceChips value={f.type} options={['Stay', 'Resold', 'Pass']}
-              onChange={(v) => setF((p) => ({ ...p, type: v, channel: v === 'Pass' ? 'Pass' : p.channel }))} />
+              onChange={(v) => setF((p) => ({ ...p, type: v, channel: v === 'Pass' ? 'Pass' : p.channel === 'Pass' ? 'Airbnb' : p.channel }))} />
           </Field>
           {f.type !== 'Pass' ? (
-            <Field label="Channel">
+            <Field label="Came from">
               <ChoiceChips value={f.channel} options={f.channel && CHANNELS.indexOf(f.channel) < 0 ? [...CHANNELS, f.channel] : CHANNELS}
                 onChange={(v) => {
                   set('channel')(v);
@@ -497,29 +437,14 @@ export default function BookingForm() {
                 }} />
             </Field>
           ) : null}
-          {/* From host: which host — picked from the list, or added right here. */}
+          {/* From host: which host — picked from the list, or added right here.
+              Their flat (if the guest sleeps there) is chosen under Stay. */}
           {f.channel === 'From host' && f.type !== 'Pass' ? (
             deal && dealHost ? (
               <View style={[st.picked, { marginTop: -4 }]}>
-                <Text style={st.pickedT}>{dealHost.name + (dealUnit ? ' · Unit ' + dealUnit.unit : '')}</Text>
-                <Text style={st.pickedS}>{(dealHost.phone ? dealHost.phone + ' · ' : '') + (dealUnit ? 'guest stays in their flat' : 'their guest, in our flat')}</Text>
+                <Text style={st.pickedT}>{dealHost.name}</Text>
+                <Text style={st.pickedS}>{dealHost.phone || 'No mobile saved'}</Text>
                 <TouchableOpacity onPress={() => { setDeal(null); if (dealUnit) { set('stayUnit')(''); setPartner(false); } }} hitSlop={8} style={st.pickedX}><Text style={st.link}>Change</Text></TouchableOpacity>
-                {hostUnitsOf(dealHost.id).length ? (
-                  <View style={[st.unitChips, { marginTop: 10 }]}>
-                    {hostUnitsOf(dealHost.id).map((u) => {
-                      const on = dealUnit?.id === u.id;
-                      return (
-                        <TouchableOpacity key={u.id} style={[st.unitChip, on && st.unitChipOn]} onPress={() => pickHostUnit(u)}>
-                          <Text style={[st.unitChipTxt, on && st.unitChipTxtOn]}>{'Unit ' + u.unit}</Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                    <TouchableOpacity style={[st.unitChip, !dealUnit && st.unitChipOn]}
-                      onPress={() => { setDeal({ ...deal, unitId: 0 }); if (dealUnit) { set('stayUnit')(''); setPartner(false); } }}>
-                      <Text style={[st.unitChipTxt, !dealUnit && st.unitChipTxtOn]}>Our flat</Text>
-                    </TouchableOpacity>
-                  </View>
-                ) : null}
               </View>
             ) : (
               <FromHostPick data={hostsData} onPick={(h) => {
@@ -533,6 +458,9 @@ export default function BookingForm() {
               }} />
             )
           ) : null}
+          <Field label="Booked for" req err={errs.property}>
+            <PropertyPicker compact value={f.property} options={s.props} onChange={set('property')} />
+          </Field>
           <Field label="Booking date" req err={errs.date}>
             <DateField value={f.date} onChange={set('date')} />
           </Field>
@@ -546,8 +474,72 @@ export default function BookingForm() {
               placeholder={f.type === 'Resold' ? 'e.g. Sudhir Badhana' : 'e.g. GVL Spira · Airbnb - Harsh'} />
           </Field>
         </FormCard>
+        </View>
 
-        <FormCard title="Stay dates" step={3} i={3}>
+        {/* 2 · The stay: where the guest actually sleeps, and when. */}
+        <FormCard title="Stay" step={2} i={2}>
+          <Field label="Guest stays in">
+            <View style={st.unitChips}>
+              <TouchableOpacity accessibilityRole="radio" accessibilityState={{ selected: stayMode === 'same' }}
+                style={[st.unitChip, stayMode === 'same' && st.unitChipOn]}
+                onPress={() => { toOurUnit(); set('stayUnit')(''); }}>
+                <Text style={[st.unitChipTxt, stayMode === 'same' && st.unitChipTxtOn]}>{'Same unit' + (unitNo(f.property) ? ' · ' + unitNo(f.property) : '')}</Text>
+              </TouchableOpacity>
+              {otherUnits.map((u) => {
+                const on = stayMode === 'owned' && f.stayUnit.trim() === u.no;
+                return (
+                  <TouchableOpacity key={u.no} accessibilityRole="radio" accessibilityState={{ selected: on }}
+                    style={[st.unitChip, on && st.unitChipOn]}
+                    onPress={() => { toOurUnit(); set('stayUnit')(on ? '' : u.no); }}>
+                    <Text style={[st.unitChipTxt, on && st.unitChipTxtOn]}>{unitNo(u.name) ? 'Unit ' + unitNo(u.name) : u.name}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+              <TouchableOpacity accessibilityRole="radio" accessibilityState={{ selected: stayMode === 'partner' }}
+                style={[st.unitChip, stayMode === 'partner' && st.unitChipOn]}
+                onPress={() => {
+                  if (stayMode === 'partner') return;
+                  setPartner(true); set('stayUnit')('');
+                  /* Keep a host picked under "Came from" — offer their flats first. */
+                  if (!(f.channel === 'From host' && deal)) setDeal(null);
+                }}>
+                <Text style={[st.unitChipTxt, stayMode === 'partner' && st.unitChipTxtOn]}>Host’s flat…</Text>
+              </TouchableOpacity>
+            </View>
+            {stayMode === 'partner' && dealUnit ? (
+              <View style={st.picked}>
+                <Text style={st.pickedT}>{'Unit ' + dealUnit.unit + (dealUnit.building ? ' · ' + dealUnit.building : '')}</Text>
+                <Text style={st.pickedS}>{'Host: ' + (dealHost?.name || '')}</Text>
+                <TouchableOpacity onPress={() => { setDeal(f.channel === 'From host' && deal ? { ...deal, unitId: 0 } : null); setPartner(true); set('stayUnit')(''); }} hitSlop={8} style={st.pickedX}><Text style={st.link}>Change</Text></TouchableOpacity>
+              </View>
+            ) : stayMode === 'partner' && dealHost && hostUnitsOf(dealHost.id).length ? (
+              <View style={[st.unitChips, { marginTop: 10 }]}>
+                {hostUnitsOf(dealHost.id).map((u) => (
+                  <TouchableOpacity key={u.id} style={st.unitChip} onPress={() => pickHostUnit(u)}>
+                    <Text style={st.unitChipTxt}>{dealHost.name.split(' ')[0] + '’s ' + u.unit}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ) : stayMode === 'partner' ? (
+              <HostUnitPick data={hostsData} typed={f.stayUnit} onPick={pickHostUnit} onType={set('stayUnit')} />
+            ) : null}
+          </Field>
+          {/* Their guest → our flat, when the booking didn't come in as "From host". */}
+          {stayMode !== 'partner' && f.channel !== 'From host' ? (
+            deal && dealHost ? (
+              <View style={st.picked}>
+                <Text style={st.pickedT}>{'Guest came from ' + dealHost.name}</Text>
+                <Text style={st.pickedS}>Their guest, in our flat</Text>
+                <TouchableOpacity onPress={() => setDeal(null)} hitSlop={8} style={st.pickedX}><Text style={st.link}>Remove</Text></TouchableOpacity>
+              </View>
+            ) : fromHost ? (
+              <HostPick data={hostsData} onPick={(h) => { setDeal({ hostId: h.id, unitId: 0, collectedBy: defaultCollector(f.channel) }); setFromHost(false); }} onCancel={() => setFromHost(false)} />
+            ) : (
+              <TouchableOpacity onPress={() => setFromHost(true)} hitSlop={6} style={{ alignSelf: 'flex-start', marginTop: -2, marginBottom: 10 }}>
+                <Text style={st.link}>+ Guest came from another host</Text>
+              </TouchableOpacity>
+            )
+          ) : null}
           <Two>
             <View style={{ flex: 1 }}>
               <Field label="Check-in date"><DateField value={f.checkinDate} onChange={set('checkinDate')} allowClear /></Field>
@@ -569,7 +561,7 @@ export default function BookingForm() {
           ) : null}
         </FormCard>
 
-        <FormCard title="Guests" step={4} i={4}
+        <FormCard title="Guests" step={3} i={3}
           note={`${nGuests} guest${nGuests === 1 ? '' : 's'} · type a name to pick from past stays · ` +
             (editing ? 'ID front is required, back optional' : 'IDs upload when the booking is saved')}>
           {Array.from({ length: nGuests }, (_, i) => {
@@ -646,7 +638,15 @@ export default function BookingForm() {
         </FormCard>
 
         <View onLayout={onCard('money')}>
-        <FormCard title="Money" step={5} i={5}>
+        <FormCard title="Money" step={4} i={4}>
+          {deal && dealHost ? (
+            <Field label="Who collected the guest’s money?">
+              <ChoiceChips value={deal.collectedBy === 'host' ? dealHost.name.split(' ')[0] : 'We did'}
+                options={[dealHost.name.split(' ')[0], 'We did']}
+                onChange={(v) => setDeal({ ...deal, collectedBy: v === 'We did' ? 'us' : 'host' })} />
+              <Text style={st.dealLine}>{dealLine}</Text>
+            </Field>
+          ) : null}
           {/* List price and discount are no longer asked for; values already on
               a booking are still carried through on save untouched. */}
           <Two>
@@ -679,7 +679,7 @@ export default function BookingForm() {
         </FormCard>
         </View>
 
-        <FormCard title="Notes" step={6} i={6}>
+        <FormCard title="Notes" step={5} i={5}>
           <Field label="Notes"><TxtInput value={f.notes} onChange={set('notes')} placeholder="Anything worth remembering" /></Field>
         </FormCard>
 
@@ -688,7 +688,7 @@ export default function BookingForm() {
             one-off steps; an existing one shows the live checklist, which
             saves tick by tick rather than with this form's Save. */}
         {s.logs?.checklist ? (
-          <FormCard title="Checklist" step={7} i={7}
+          <FormCard title="Checklist" step={6} i={6}
             note={editing ? 'Saved as you tick — not part of “Save changes”.' : undefined}>
             {editing && s.editB
               ? <BookingChecklist row={s.editB.row} bare />
