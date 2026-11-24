@@ -555,7 +555,10 @@ export default function BookingForm() {
               {/* A pre-ledger "Resold to" name with no host linked yet. */}
               {!deal && f.referrer ? <Text style={st.hitNote}>{'Saved as “' + f.referrer + '” — pick or add the host to track the money.'}</Text> : null}
             </Field>
-          ) : (
+          ) : isOta || f.channel === 'From host' ? null : (
+          /* A platform booking has no referrer, and From host already names the
+             host — the box is only for Direct/Referral. A value already saved
+             on the booking is kept as it is. */
           <Field
             label="Referrer / source"
             hint={f.type === 'Resold' ? 'Who the night went to — shown on the check-in card.' : undefined}
