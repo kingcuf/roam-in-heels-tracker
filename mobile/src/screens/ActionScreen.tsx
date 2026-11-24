@@ -10,6 +10,8 @@ import {
   computeStays, computeTasks, fmtEnquiryWhen, taskWhen, todayIso, unitNumberOf,
 } from '../logic';
 import { unitNo } from '../propertyPicker';
+import { coverFor } from '../unitCovers';
+import Svg, { Path } from 'react-native-svg';
 import TaskForm from './TaskForm';
 
 /* The Action tab: the property manager's morning screen.
@@ -214,8 +216,7 @@ export default function ActionScreen() {
   const flagsOf = (c: CardData, skip: { id?: boolean; due?: boolean } = {}) => {
     const f: Flag[] = [];
     const idx = idByRow[c.row];
-    if (!skip.id && idx && idx.missing.length) f.push({ text: idx.have + '/' + idx.expected + ' IDs', tone: 'bad' });
-    if (!skip.due && c.pending > 0) f.push({ text: inr(c.pending) + ' due', tone: 'bad' });
+    if (!skip.id && idx && idx.missing.length) f.push({ text: 'ID missing · ' + idx.have + ' of ' + idx.expected, tone: 'bad' });
     if (c.type === 'Resold' && c.referrer) f.push({ text: 'Resold · ' + c.referrer, tone: 'info' });
     return f;
   };
@@ -297,7 +298,6 @@ export default function ActionScreen() {
         <ScrollView ref={scroller} style={{ flex: 1 }} contentContainerStyle={{ padding: 14, paddingBottom: page === 'pay' && selRows.length ? 110 : 40 }}>
           {page === 'ci' && (ci.today.length ? ci.today.map((x) => (
             <BRow key={'ci' + x.row} c={x.card} pin={s.pin} docId={docFor(x.row)} focus="in"
-              right={x.card.inT ? <TimePill t={x.card.inT} kind="in" /> : undefined}
               flags={flagsOf(x.card)} actions={contact(x.card)}
               primary={idByRow[x.row] ? { label: 'Upload ID', onPress: () => s.setIdTarget(idByRow[x.row]) } : undefined}
               onPress={() => openBooking(x.row)} />
@@ -305,7 +305,6 @@ export default function ActionScreen() {
 
           {page === 'co' && (ci.checkoutsToday.length ? ci.checkoutsToday.map((x) => (
             <BRow key={'co' + x.row} c={x.card} pin={s.pin} docId={docFor(x.row)} focus="out"
-              right={x.card.outT ? <TimePill t={x.card.outT} kind="out" /> : undefined}
               flags={flagsOf(x.card, { id: true })} actions={contact(x.card)}
               onPress={() => openBooking(x.row)} />
           )) : <Empty title="Nobody leaving today" />)}
@@ -317,7 +316,6 @@ export default function ActionScreen() {
                   <Text style={st.groupHead}>{dayHead(g.date)}</Text>
                   {g.items.map((x) => (
                     <BRow key={'up' + x.row} c={x.card} pin={s.pin} docId={docFor(x.row)} focus="in"
-                      right={x.card.inT ? <TimePill t={x.card.inT} kind="in" /> : undefined}
                       flags={flagsOf(x.card)} onPress={() => openBooking(x.row)}
                       primary={idByRow[x.row] ? { label: 'Upload ID', onPress: () => s.setIdTarget(idByRow[x.row]) } : undefined} />
                   ))}
@@ -354,10 +352,9 @@ export default function ActionScreen() {
               : ' · missing ' + x.missing.map((sl) => sl === 'lead' ? (x.guest || 'lead guest') : (x.coGuest || 'co-guest')).join(' and ');
             return (
               <BRow key={'id' + x.row} c={x.card} pin={s.pin} docId={docFor(x.row)} focus="in"
-                right={<Text style={[st.count, urgent && st.countBad]}>{x.have}/{x.expected}</Text>}
-                note={(x.ci ? (n! < 0 ? 'Checked in ' + relDay(x.ci) : n === 0 ? 'Arrives today' : n === 1 ? 'Arrives tomorrow' : 'Arrives ' + relDay(x.ci)) : 'No check-in date') + who}
+                note={x.ci ? (who ? who.slice(3).replace(/^m/, 'M') : undefined) : 'No check-in date' + who}
                 noteTone={urgent ? C.red : undefined}
-                flags={flagsOf(x.card, { id: true })}
+                flags={flagsOf(x.card)}
                 primary={{ label: 'Upload ID', onPress: () => s.setIdTarget(x) }}
                 onPress={() => s.setIdTarget(x)} onOpen={() => openBooking(x.row)} />
             );
@@ -369,7 +366,6 @@ export default function ActionScreen() {
             return (
               <BRow key={'pay' + p.row} c={p.card} pin={s.pin} docId={docFor(p.row)} focus="none"
                 select={manage && !req ? on : undefined}
-                right={<Text style={st.due}>{inr(p.pending)}</Text>}
                 note={[p.card.paid ? 'Guest paid ' + inr(p.card.paid) : '', 'net ' + inr(p.card.net)].filter(Boolean).join(' · ')}
                 wait={req ? '#' + req.id + ' · marked paid' : undefined}
                 flags={[]} actions={contact(p.card)}
@@ -504,7 +500,7 @@ export default function ActionScreen() {
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={st.moveName} numberOfLines={1}>{nameOf(x)}</Text>
-                      <Text style={st.moveSub} numberOfLines={1}>{unitOf(x.card)}{x.card.channel ? ' · ' + x.card.channel : ''}{x.card.guests ? ' · ' + x.card.guests + ' guest' + (x.card.guests === 1 ? '' : 's') : ''}</Text>
+                      <View style={st.subRow}><Platform ch={x.card.channel} small /><Text style={st.moveSub} numberOfLines={1}>Unit {unitOf(x.card)}{x.card.guests ? ' · ' + x.card.guests + ' guest' + (x.card.guests === 1 ? '' : 's') : ''}</Text></View>
                     </View>
                     {kind === 'in' && idx ? <Tag text="No ID" tone="bad" /> : null}
                     {x.card.pending > 0 ? <Tag text={inr(x.card.pending)} tone="bad" /> : null}
@@ -563,7 +559,7 @@ export default function ActionScreen() {
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={st.needTitle} numberOfLines={1}>{nameOf(x)}</Text>
-                  <Text style={st.needSub} numberOfLines={1}>{unitOf(x.card)} · {x.card.nights === null ? 'stay' : x.card.nights === 0 ? 'day use' : x.card.nights + ' night' + (x.card.nights === 1 ? '' : 's')}{x.card.channel ? ' · ' + x.card.channel : ''}</Text>
+                  <View style={st.subRow}><Platform ch={x.card.channel} small /><Text style={st.needSub} numberOfLines={1}>Unit {unitOf(x.card)} · {x.card.nights === null ? 'stay' : x.card.nights === 0 ? 'day use' : x.card.nights + ' night' + (x.card.nights === 1 ? '' : 's')}</Text></View>
                 </View>
                 {idByRow[x.row] ? <Tag text="No ID" tone="bad" /> : null}
                 <Text style={st.chev}>›</Text>
@@ -662,44 +658,55 @@ function Empty({ title, sub, cta }: { title: string; sub?: string; cta?: { label
   );
 }
 
-/* ── the booking row, shared by every booking queue ──────────────────────
-   Name and unit first (who, and which door), the stay on one line with the
-   end this queue cares about in bold, the problems as tags, then the buttons
-   that clear them. Nothing that is not known is printed. */
+/* ── the booking card, shared by every booking queue ─────────────────────
+   Read top to bottom, it answers the five questions a manager has about a
+   booking, in the order they are asked:
+     who and where   the unit's photo with the guest's face (their ID photo,
+                     else their initial) laid over it, name, unit, party size
+     from where      the platform as a coloured badge: where to go and check
+     how much        anything still owed, large, in the top-right corner
+     when            a check-in / check-out strip: date first, then day and time,
+                     the end this queue is about in colour, nights between
+     what to do      problems as tags, then the buttons that clear them
+   Nothing unknown is printed: no "time not recorded", no empty boxes. */
 type Btnish = { label: string; onPress: () => void; solid?: boolean; quiet?: boolean };
-function BRow({ c, pin, docId, focus, right, note, noteTone, flags, actions, primary, buttons, wait, select, onPress, onOpen }: {
+function BRow({ c, pin, docId, focus, note, noteTone, flags, actions, primary, buttons, wait, select, onPress, onOpen }: {
   c: CardData; pin: string; docId?: number; focus: 'in' | 'out' | 'none';
-  right?: React.ReactNode; note?: string; noteTone?: string; flags: Flag[];
+  note?: string; noteTone?: string; flags: Flag[];
   actions?: Btnish[]; primary?: Btnish; buttons?: Btnish[]; wait?: string;
   select?: boolean; onPress: () => void; onOpen?: () => void;
 }) {
-  const inS = c.inD ? relDay(c.inD) : '';
-  const outS = c.outD ? relDay(c.outD) : '';
-  const nights = c.nights !== null ? (c.nights === 0 ? 'day use' : c.nights + 'n') : '';
-  const meta = [unitOf(c), c.channel, c.guests ? c.guests + ' guest' + (c.guests === 1 ? '' : 's') : ''].filter(Boolean).join(' · ');
-  const btns: Btnish[] = [...(actions || []), ...(buttons || []), ...(primary ? [{ ...primary, solid: true }] : [])];
+  const call = actions?.find((x) => x.label === 'Call');
+  const wa = actions?.find((x) => x.label === 'WhatsApp');
+  const btns: Btnish[] = [...(buttons || []), ...(primary ? [{ ...primary, solid: true }] : [])];
+  const people = c.guests ? c.guests + (c.guests === 1 ? ' guest' : ' guests') : '';
   return (
-    <View style={[st.row, select && st.rowOn]}>
-      <TouchableOpacity onPress={onPress} activeOpacity={0.75}>
-        <View style={st.rowHead}>
+    <View style={[st.card, select && st.cardOn]}>
+      <TouchableOpacity onPress={onPress} activeOpacity={0.8}>
+        <View style={st.cardTop}>
           {select !== undefined ? (
             <View style={[st.check, select && st.checkOn]}>{select ? <Text style={st.checkMark}>✓</Text> : null}</View>
           ) : null}
-          <Avatar name={c.guest || 'Guest'} pin={pin} docId={docId} />
-          <View style={{ flex: 1 }}>
-            <Text style={st.rowName} numberOfLines={1}>{c.guest || c.id || 'Guest'}</Text>
-            <Text style={st.rowMeta} numberOfLines={1}>{meta}</Text>
+          <DuoAvatar c={c} pin={pin} docId={docId} />
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={st.cName} numberOfLines={1}>{c.guest || c.id || 'Guest'}</Text>
+            <View style={st.subRow}>
+              <Platform ch={c.channel} />
+              <Text style={st.cMeta} numberOfLines={1}>Unit {unitOf(c)}{people ? ' · ' + people : ''}</Text>
+            </View>
           </View>
-          {right}
+          {c.pending > 0 ? (
+            <View style={{ alignItems: 'flex-end' }}>
+              <Text style={st.cDue}>{inr(c.pending)}</Text>
+              <Text style={st.cDueLbl}>PENDING</Text>
+            </View>
+          ) : c.paid > 0 ? (
+            <View style={st.paidChip}><Text style={st.paidTxt}>Paid</Text></View>
+          ) : null}
         </View>
-        {inS || outS ? (
-          <Text style={st.stay} numberOfLines={1}>
-            <Text style={focus === 'in' ? st.stayOn : undefined}>{inS || '—'}{c.inT ? ' ' + c.inT : ''}</Text>
-            <Text style={st.stayArrow}>{'  →  '}</Text>
-            <Text style={focus === 'out' ? st.stayOn : undefined}>{outS || '—'}{c.outT ? ' ' + c.outT : ''}</Text>
-            {nights ? <Text style={st.stayN}>{'   ' + nights}</Text> : null}
-          </Text>
-        ) : null}
+
+        {c.inD || c.outD ? <StayStrip c={c} focus={focus} /> : null}
+
         {note ? <Text style={[st.note, noteTone ? { color: noteTone } : null]} numberOfLines={2}>{note}</Text> : null}
         {flags.length || wait ? (
           <View style={st.tags}>
@@ -708,8 +715,11 @@ function BRow({ c, pin, docId, focus, right, note, noteTone, flags, actions, pri
           </View>
         ) : null}
       </TouchableOpacity>
-      {btns.length || onOpen ? (
-        <View style={st.btnRow}>
+
+      {call || wa || btns.length || onOpen ? (
+        <View style={st.cFoot}>
+          {call ? <IconBtn kind="call" onPress={call.onPress} /> : null}
+          {wa ? <IconBtn kind="wa" onPress={wa.onPress} /> : null}
           {btns.map((x, i) => (
             <TouchableOpacity key={i} onPress={x.onPress} activeOpacity={0.7} style={[st.act, x.solid && st.actSolid]}>
               <Text style={[st.actTxt, x.solid && { color: '#fff' }, x.quiet && { color: C.muted }]}>{x.label}</Text>
@@ -723,12 +733,107 @@ function BRow({ c, pin, docId, focus, right, note, noteTone, flags, actions, pri
   );
 }
 
-function Avatar({ name, pin, docId }: { name: string; pin: string; docId?: number }) {
+/* Check-in and check-out side by side. Date first (that is what is
+   compared), then the weekday or Today/Tomorrow and the time underneath. */
+const MON3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function StayStrip({ c, focus }: { c: CardData; focus: 'in' | 'out' | 'none' }) {
+  const end = (d: Date | null, t: string, lbl: string, on: boolean, ink: string, right?: boolean) => {
+    const n = daysFromToday(d);
+    const rel = n === 0 ? 'Today' : n === 1 ? 'Tomorrow' : n === -1 ? 'Yesterday' : d ? WD[d.getDay()] : '';
+    return (
+      <View style={[{ flex: 1 }, right && { alignItems: 'flex-end' }]}>
+        <Text style={[st.sLbl, on && { color: ink }]}>{lbl}</Text>
+        <Text style={[st.sDate, on && { color: ink }]}>{d ? d.getDate() + ' ' + MON3[d.getMonth()] : '—'}</Text>
+        <Text style={[st.sSub, n !== null && Math.abs(n) <= 1 && { color: ink, fontFamily: F.bold }]} numberOfLines={1}>
+          {[rel, t].filter(Boolean).join(' · ') || ' '}
+        </Text>
+      </View>
+    );
+  };
+  const n = c.nights;
+  return (
+    <View style={st.strip}>
+      {end(c.inD, c.inT, 'CHECK-IN', focus === 'in', C.green)}
+      <View style={st.sMid}>
+        <View style={st.sLine} />
+        <Text style={st.sNights}>{n === null ? '' : n === 0 ? 'day use' : n + (n === 1 ? ' night' : ' nights')}</Text>
+        <View style={st.sLine} />
+      </View>
+      {end(c.outD, c.outT, 'CHECK-OUT', focus === 'out', G.gold3, true)}
+    </View>
+  );
+}
+
+/* The flat's photo, with the guest overlapping it: their ID photo when one
+   was uploaded, else their initial. Which flat and which person, at once. */
+function DuoAvatar({ c, pin, docId }: { c: CardData; pin: string; docId?: number }) {
   const [failed, setFailed] = useState(false);
-  if (docId && !failed) {
-    return <Image source={{ uri: api.attachmentUrl(pin, docId) }} style={st.avatar} onError={() => setFailed(true)} />;
-  }
-  return <View style={st.avatar}><Text style={st.avatarTxt}>{(name || '?').trim().slice(0, 1).toUpperCase()}</Text></View>;
+  const u = unitOf(c);
+  const cover = coverFor(unitNo(u) || u);
+  const initial = (c.guest || '?').trim().slice(0, 1).toUpperCase();
+  return (
+    <View style={st.duo}>
+      {cover ? <Image source={cover} style={st.duoUnit} /> : (
+        <View style={[st.duoUnit, st.duoUnitFallback]}><Text style={[st.duoUnitTxt, u.length > 3 && { fontSize: 10.5 }, u.length > 4 && { fontSize: 9 }]} numberOfLines={1}>{u.slice(0, 6)}</Text></View>
+      )}
+      <View style={st.duoGuest}>
+        {docId && !failed
+          ? <Image source={{ uri: api.attachmentUrl(pin, docId) }} style={st.duoGuestImg} onError={() => setFailed(true)} />
+          : <Text style={st.duoGuestTxt}>{initial}</Text>}
+      </View>
+    </View>
+  );
+}
+
+/* Where the booking came from, so you know where to go and check. Plain
+   coloured labels; the colours are only there to tell them apart at a glance. */
+const PLATFORM: Record<string, { label: string; fg: string; bg: string }> = {
+  airbnb: { label: 'Airbnb', fg: '#D93B4A', bg: '#FDECEE' },
+  booking: { label: 'Booking.com', fg: '#1D4F9E', bg: '#E8EFFA' },
+  agoda: { label: 'Agoda', fg: '#6A3FC4', bg: '#F0EBFB' },
+  mmt: { label: 'MMT', fg: '#C2410C', bg: '#FDEFE6' },
+  host: { label: 'From host', fg: G.gold3, bg: C.amberbg },
+  direct: { label: 'Direct', fg: '#3F4A44', bg: '#ECEFED' },
+};
+function platformOf(ch: string) {
+  const v = String(ch || '').toLowerCase();
+  if (v.includes('airbnb')) return PLATFORM.airbnb;
+  if (v.includes('booking')) return PLATFORM.booking;
+  if (v.includes('agoda')) return PLATFORM.agoda;
+  if (v.includes('mmt') || v.includes('makemytrip') || v.includes('goibibo')) return PLATFORM.mmt;
+  if (v.includes('host') || v.includes('offline')) return PLATFORM.host;
+  if (!v) return null;
+  if (v.includes('direct') || v.includes('referral')) return PLATFORM.direct;
+  return { ...PLATFORM.direct, label: ch };
+}
+function Platform({ ch, small }: { ch: string; small?: boolean }) {
+  const p = platformOf(ch);
+  if (!p) return null;
+  return (
+    <View style={[st.plat, { backgroundColor: p.bg }, small && st.platSm]}>
+      <View style={[st.platDot, { backgroundColor: p.fg }]} />
+      <Text style={[st.platTxt, { color: p.fg }, small && { fontSize: 10.5 }]} numberOfLines={1}>{p.label}</Text>
+    </View>
+  );
+}
+
+function IconBtn({ kind, onPress }: { kind: 'call' | 'wa'; onPress: () => void }) {
+  const wa = kind === 'wa';
+  return (
+    <TouchableOpacity onPress={onPress} activeOpacity={0.7} accessibilityLabel={wa ? 'WhatsApp the guest' : 'Call the guest'}
+      style={[st.iconBtn, wa && { backgroundColor: '#E7F7EE', borderColor: '#BFE8CF' }]}>
+      <Svg width={17} height={17} viewBox="0 0 24 24">
+        {wa ? (
+          <>
+            <Path d="M12 3a9 9 0 0 0-7.8 13.5L3 21l4.6-1.2A9 9 0 1 0 12 3z" fill="none" stroke="#1E9E57" strokeWidth={1.9} strokeLinejoin="round" />
+            <Path d="M9 8.6c.2-.4.5-.4.8-.4h.5c.2 0 .4.1.5.4l.6 1.5c.1.2 0 .5-.1.6l-.5.6c.6 1.1 1.5 2 2.6 2.6l.6-.5c.2-.1.4-.2.6-.1l1.5.6c.3.1.4.3.4.5v.5c0 .3-.1.6-.4.8-.5.4-1.2.6-1.9.4-2.6-.7-4.6-2.7-5.3-5.3-.1-.7 0-1.4.5-1.9z" fill="#1E9E57" />
+          </>
+        ) : (
+          <Path d="M6.6 3.5h2.1c.4 0 .8.3.9.7l.9 3.3c.1.4 0 .8-.3 1L8.7 9.8a12 12 0 0 0 5.5 5.5l1.3-1.5c.3-.3.7-.4 1-.3l3.3.9c.4.1.7.5.7.9v2.1c0 1-.8 1.8-1.8 1.8C10.3 19.2 4.8 13.7 4.8 5.3c0-1 .8-1.8 1.8-1.8z" fill="none" stroke={C.ink} strokeWidth={1.8} strokeLinejoin="round" />
+        )}
+      </Svg>
+    </TouchableOpacity>
+  );
 }
 
 function TaskRow({ t, req, onToggle, onEdit, last }: { t: TaskItem; req?: Ticket | null; onToggle: () => void; onEdit: () => void; last?: boolean }) {
@@ -883,6 +988,43 @@ const st = StyleSheet.create({
   groupHead: { fontFamily: F.bold, fontSize: 12, color: C.bark, marginBottom: 8, marginTop: 6, marginLeft: 2 },
   more: { fontFamily: F.med, fontSize: 12, color: C.muted, paddingTop: 4, textAlign: 'center' },
 
+  card: {
+    backgroundColor: '#fff', borderRadius: 20, padding: 14, marginBottom: 12,
+    borderWidth: 1, borderColor: 'rgba(90,58,20,0.09)',
+    shadowColor: G.shadow, shadowOpacity: 0.06, shadowRadius: 10, shadowOffset: { width: 0, height: 3 }, elevation: 2,
+  },
+  cardOn: { borderColor: C.navy, borderWidth: 1.5 },
+  cardTop: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  cName: { fontFamily: F.xbold, fontSize: 16.5, color: C.ink, letterSpacing: -0.2 },
+  subRow: { flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 4 },
+  cMeta: { fontFamily: F.semi, fontSize: 12, color: C.bark, flexShrink: 1 },
+  cDue: { fontFamily: F.xbold, fontSize: 17, color: C.red, letterSpacing: -0.3 },
+  cDueLbl: { fontFamily: F.bold, fontSize: 8.5, letterSpacing: 1, color: C.red, opacity: 0.75, marginTop: 1 },
+  paidChip: { backgroundColor: C.greenbg, borderRadius: 999, paddingVertical: 4, paddingHorizontal: 10 },
+  paidTxt: { fontFamily: F.bold, fontSize: 11, color: C.green },
+  duo: { width: 56, height: 50 },
+  duoUnit: { width: 46, height: 46, borderRadius: 23, backgroundColor: C.bone },
+  duoUnitFallback: { backgroundColor: '#2B2B33', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  duoUnitTxt: { fontFamily: F.xbold, fontSize: 12, color: '#fff' },
+  duoGuest: {
+    position: 'absolute', right: 0, bottom: 0, width: 30, height: 30, borderRadius: 15, borderWidth: 2.5, borderColor: '#fff',
+    backgroundColor: '#EFE7DA', alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+  },
+  duoGuestImg: { width: '100%', height: '100%' },
+  duoGuestTxt: { fontFamily: F.xbold, fontSize: 12.5, color: G.gold3 },
+  plat: { flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 999, paddingVertical: 3, paddingHorizontal: 8 },
+  platSm: { paddingVertical: 2, paddingHorizontal: 7 },
+  platDot: { width: 6, height: 6, borderRadius: 3 },
+  platTxt: { fontFamily: F.bold, fontSize: 11 },
+  strip: { flexDirection: 'row', alignItems: 'center', marginTop: 12, backgroundColor: C.warm2, borderRadius: 14, paddingVertical: 10, paddingHorizontal: 12, borderWidth: 1, borderColor: C.hair },
+  sLbl: { fontFamily: F.bold, fontSize: 8.5, letterSpacing: 1, color: C.muted },
+  sDate: { fontFamily: F.xbold, fontSize: 15.5, color: C.ink, marginTop: 2, letterSpacing: -0.2 },
+  sSub: { fontFamily: F.semi, fontSize: 11, color: C.bark, marginTop: 1 },
+  sMid: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 4 },
+  sLine: { width: 12, height: 1, backgroundColor: '#D9D5CB' },
+  sNights: { fontFamily: F.bold, fontSize: 10.5, color: C.muted },
+  cFoot: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 7, marginTop: 12 },
+  iconBtn: { width: 34, height: 34, borderRadius: 17, borderWidth: 1, borderColor: C.line, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' },
   row: { backgroundColor: '#fff', borderRadius: 16, borderWidth: 1, borderColor: 'rgba(90,58,20,0.10)', padding: 13, marginBottom: 10 },
   rowOn: { borderColor: C.navy, borderWidth: 1.5 },
   rowHead: { flexDirection: 'row', alignItems: 'center', gap: 10 },
