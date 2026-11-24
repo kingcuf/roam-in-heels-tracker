@@ -647,12 +647,18 @@ function UnitBanner({ name, on, onPress, status, busy }: { name: string; on: boo
   return (
     <TouchableOpacity onPress={onPress} activeOpacity={0.8} accessibilityRole="button" accessibilityState={{ selected: on }}
       style={[st.ub, on && st.ubOn]}>
-      {cover ? <Image source={cover} style={StyleSheet.absoluteFill as any} resizeMode="cover" /> : null}
-      <View style={[st.ubShade, all && { backgroundColor: C.navy }]} />
-      <Text style={st.ubName} numberOfLines={1}>{all ? 'All units' : u}</Text>
-      <View style={st.ubStatus}>
-        {!all ? <View style={[st.ubDot, { backgroundColor: busy ? '#7FD3A8' : '#F2C27B' }]} /> : null}
-        <Text style={st.ubStatusTxt} numberOfLines={1}>{status}</Text>
+      <View style={st.ubPic}>
+        {cover ? <Image source={cover} style={st.ubImg} resizeMode="cover" />
+          : all ? (
+            <Svg width={16} height={16} viewBox="0 0 24 24">
+              <Path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" fill="#fff" />
+            </Svg>
+          ) : <Text style={st.ubPicTxt}>{u.slice(0, 4)}</Text>}
+        {!all ? <View style={[st.ubDot, { backgroundColor: busy ? C.green : '#E0A84E' }]} /> : null}
+      </View>
+      <View>
+        <Text style={[st.ubName, on && { color: '#fff' }]} numberOfLines={1}>{all ? 'All units' : u}</Text>
+        <Text style={[st.ubStatusTxt, on && { color: 'rgba(255,255,255,0.75)' }]} numberOfLines={1}>{status}</Text>
       </View>
     </TouchableOpacity>
   );
@@ -1128,13 +1134,14 @@ const st = StyleSheet.create({
   bannerT: { fontFamily: F.bold, fontSize: 14, color: '#fff' },
   bannerS: { fontFamily: F.semi, fontSize: 12, color: 'rgba(255,255,255,0.75)', marginTop: 1 },
   propRow: { gap: 7, alignItems: 'center', paddingBottom: 12, paddingRight: 4 },
-  ub: { width: 104, height: 58, borderRadius: 14, overflow: 'hidden', justifyContent: 'flex-end', paddingHorizontal: 10, paddingBottom: 7, backgroundColor: C.bone, borderWidth: 2, borderColor: 'transparent' },
-  ubOn: { borderColor: G.gold2 },
-  ubShade: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(15,12,10,0.30)' },
-  ubName: { fontFamily: F.xbold, fontSize: 16, color: '#fff', letterSpacing: -0.2, textShadowColor: 'rgba(0,0,0,0.55)', textShadowRadius: 6 },
-  ubStatus: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 1 },
-  ubDot: { width: 6, height: 6, borderRadius: 3 },
-  ubStatusTxt: { fontFamily: F.bold, fontSize: 10.5, color: '#fff', textShadowColor: 'rgba(0,0,0,0.6)', textShadowRadius: 5 },
+  ub: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 5, paddingLeft: 5, paddingRight: 14, borderRadius: 999, backgroundColor: '#fff', borderWidth: 1, borderColor: C.line },
+  ubOn: { backgroundColor: C.navy, borderColor: C.navy },
+  ubPic: { width: 38, height: 38, borderRadius: 19, backgroundColor: C.navy, alignItems: 'center', justifyContent: 'center' },
+  ubImg: { width: 38, height: 38, borderRadius: 19 },
+  ubPicTxt: { fontFamily: F.xbold, fontSize: 10, color: '#fff' },
+  ubDot: { position: 'absolute', right: -1, bottom: -1, width: 12, height: 12, borderRadius: 6, borderWidth: 2, borderColor: '#fff' },
+  ubName: { fontFamily: F.xbold, fontSize: 14, color: C.ink, letterSpacing: -0.2 },
+  ubStatusTxt: { fontFamily: F.semi, fontSize: 10.5, color: C.muted, marginTop: 0 },
   pChip: { paddingVertical: 6, paddingHorizontal: 13, borderRadius: 999, borderWidth: 1, borderColor: C.line, backgroundColor: C.card },
   pChipOn: { backgroundColor: C.navy, borderColor: C.navy },
   pTxt: { fontFamily: F.semi, fontSize: 12, color: C.bark },
