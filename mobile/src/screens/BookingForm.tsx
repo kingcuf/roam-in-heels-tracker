@@ -1,12 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { LayoutChangeEvent, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, LayoutChangeEvent, Linking, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { C, F, inr } from '../theme';
 import { useStore } from '../store';
 import { confirmDestructive, useToast } from '../ui';
 import { Field, TxtInput, SelectField, DateField, TimeField } from '../fields';
 import { api } from '../api';
 import IdUploader, { StagedFile } from './IdUploader';
-import { ExtraGuest, Host, HostUnit, HostsData, OTA_CHANNELS, IdSlot, dealOf, defaultCollector, hostById, unitById, frontForGuest, ownedPropertyName, parseExtraGuests, splitPreview, todayIso, unitNumberOf } from '../logic';
+import { ExtraGuest, Host, HostUnit, HostsData, OTA_CHANNELS, frontOf, guestLabel, IdSlot, dealOf, defaultCollector, hostById, unitById, frontForGuest, ownedPropertyName, parseExtraGuests, splitPreview, todayIso, unitNumberOf } from '../logic';
 import { BookingChecklist, ExtraStep, NewBookingSteps } from '../checklist';
 import { isMoneyText, moneyNum, moneyRule } from '../money';
 import { GuestNameInput, KnownGuest, useGuestDirectory } from '../guests';
@@ -86,6 +86,8 @@ export default function BookingForm() {
   const [nGuests, setNGuests] = useState(1);
   /* Returning guests: ID documents to copy from their past booking on save,
      keyed by the guest slot on THIS booking ('lead', 'co', 'g3' …). */
+  /* "Filled from a past stay" — what was brought in, and how to undo it. */
+  const [filledFrom, setFilledFrom] = useState<null | { name: string; when: string; prop: string; row: number; names: string[]; snap: any }>(null);
   const [idOpen, setIdOpen] = useState<Record<string, boolean>>({});   // ID uploader unfolded per guest
   const onFile = (front: string) => !!s.editB && ((s.idMap as any)?.[String(s.editB.row)] || []).some((x: string) => x === front || x === front + '-back');
   const [idCopies, setIdCopies] = useState<Record<string, { fromRow: number; fromFront: string; when: string }>>({});
@@ -162,7 +164,7 @@ export default function BookingForm() {
       setHostShare(hs !== null ? String(hs) : '');
       /* The booking stores everything deducted; show only the non-host part here. */
       if (hs !== null && base.commission !== '' && isMoneyText(base.commission)) setF((p) => ({ ...p, commission: String(Math.round((moneyNum(base.commission) - hs) * 100) / 100) }));
-      setHadDeal(!!dl); setFromHost(false); setPartner(false); setIdCopies({});
+      setHadDeal(!!dl); setFromHost(false); setPartner(false); setIdCopies({}); setFilledFrom(null);
       const ex = parseExtraGuests(c[27]);
       const n = Math.max(1, base.coGuest.trim() ? 2 : 1, ex.length ? 2 + ex.length : 1, Number(base.guests) || 1);
       setNGuests(Math.min(12, n));
@@ -215,7 +217,7 @@ export default function BookingForm() {
     setStaged({});
     setNGuests(1); setExtras([]); setSteps([]);
     setF({ ...EMPTY, date: todayIso(), property: s.props[0]?.name || '' });
-    setPartner(false); setDeal(null); setHadDeal(false); setFromHost(false); setIdCopies({}); setIdOpen({}); setHostShare('');
+    setPartner(false); setDeal(null); setHadDeal(false); setFromHost(false); setIdCopies({}); setIdOpen({}); setHostShare(''); setFilledFrom(null);
   };
 
   const submit = async () => {
@@ -449,6 +451,10 @@ export default function BookingForm() {
      came with them, plus the ID documents already on file for each. */
   const docsOf = (row: number) => new Set(((s.idDocs || {})[String(row)] || []).map((d: any) => String(d.slot)));
   const pick = (i: number, k: KnownGuest) => {
+    const snap = i === 0 ? {
+      f: { guest: f.guest, leadBirthYr: f.leadBirthYr, phone: f.phone, repeat: f.repeat, coGuest: f.coGuest, coGuestBirthYr: f.coGuestBirthYr },
+      extras: [...extras], nGuests, idCopies: { ...idCopies },
+    } : null;
     setGuest(i, { name: k.name, birthYr: k.birthYr });
     if (i === 0) setF((p) => ({ ...p, phone: k.phone || p.phone, repeat: 'Yes' }));
     const have = k.lastRow ? docsOf(k.lastRow) : new Set<string>();
@@ -477,9 +483,20 @@ export default function BookingForm() {
       }
     }
     setIdCopies((x) => ({ ...x, ...copies }));
+    if (snap) setFilledFrom({ name: k.name, when, prop: k.lastUnit ? 'Unit ' + String(k.lastUnit).trim() : k.lastProp, row: k.lastRow, names, snap });
     const nIds = Object.keys(copies).length;
     toast(names.join(' + ') + ' — from the ' + when + ' stay' + (nIds ? ' · ' + nIds + ' ID' + (nIds === 1 ? '' : 's') + ' attach on save' : ''), true);
   };
+  const undoFill = () => {
+    if (!filledFrom) return;
+    const sn = filledFrom.snap;
+    setF((p) => ({ ...p, ...sn.f })); setExtras(sn.extras); setNGuests(sn.nGuests); setIdCopies(sn.idCopies);
+    setFilledFrom(null);
+  };
+  /* The documents behind a queued copy: front and back of one guest on the past booking. */
+  const docsFor = (row: number, front: string) =>
+    (((s.idDocs || {})[String(row)] || []) as { id: number; slot: string; type: string }[]).filter((d) => d.slot === front || d.slot === front + '-back')
+      .sort((a, b) => (a.slot === front ? -1 : 1) - (b.slot === front ? -1 : 1));
   const addGuest = () => {
     if (nGuests >= 12) return;
     if (nGuests >= 2) setExtras((x) => { const y = [...x]; while (y.length < nGuests - 1) y.push({ name: '', birthYr: '' }); return y; });
@@ -656,6 +673,28 @@ export default function BookingForm() {
         </FormCard>
 
         <FormCard title="Guests" step={3} i={3}>
+          {filledFrom ? (
+            <View style={st.filled}>
+              <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={st.filledT}>{'Filled from ' + filledFrom.name.split(' ')[0] + '’s stay'}</Text>
+                  <Text style={st.filledS}>{[filledFrom.when, filledFrom.prop].filter(Boolean).join(' · ')}</Text>
+                </View>
+                <TouchableOpacity onPress={undoFill} hitSlop={8}><Text style={st.link}>Undo</Text></TouchableOpacity>
+              </View>
+              <Text style={st.filledNames}>{filledFrom.names.join(' · ')}</Text>
+              {((s.idDocs || {})[String(filledFrom.row)] || []).length ? (
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                  {(((s.idDocs || {})[String(filledFrom.row)] || []) as { id: number; slot: string; type: string }[]).map((d) => (
+                    <View key={d.id} style={{ alignItems: 'center', gap: 2 }}>
+                      <IdThumb d={d} pin={s.pin} size={60} />
+                      <Text style={st.thumbLbl}>{guestLabel(frontOf(d.slot as IdSlot)).replace('Lead guest', 'Primary') + (/-back$/.test(d.slot) ? ' · back' : '')}</Text>
+                    </View>
+                  ))}
+                </View>
+              ) : <Text style={st.filledS}>No IDs on file from that stay — upload them below.</Text>}
+            </View>
+          ) : null}
           {Array.from({ length: nGuests }, (_, i) => {
             const g = guestAt(i);
             const last = i === nGuests - 1 && i > 0;
@@ -707,6 +746,9 @@ export default function BookingForm() {
                 ) : null}
                 {copy ? (
                   <View style={st.copyRow}>
+                    <View style={{ flexDirection: 'row', gap: 6 }}>
+                      {docsFor(copy.fromRow, copy.fromFront).map((d) => <IdThumb key={d.id} d={d} pin={s.pin} />)}
+                    </View>
                     <Text style={st.copyT}>{'✓ ID from the ' + copy.when + ' stay — attaches on save'}</Text>
                     <TouchableOpacity onPress={() => { setIdCopies((x) => { const y = { ...x }; delete y[front]; return y; }); setIdOpen((x) => ({ ...x, [front]: true })); }} hitSlop={8}>
                       <Text style={st.link}>Use a different ID</Text>
@@ -876,6 +918,18 @@ function HostUnitPick({ data, typed, onPick, onType }: { data?: HostsData; typed
 }
 /* Channel "From host": search the hosts we know, or add one in place —
    name, mobile and the unit the guest gets (blank = they're in our flat). */
+/* One ID document as a tappable thumbnail (PDFs as a labelled tile). */
+function IdThumb({ d, pin, size = 44 }: { d: { id: number; type: string }; pin: string; size?: number }) {
+  const open = () => Linking.openURL(api.attachmentUrl(pin, d.id)).catch(() => {});
+  return (
+    <TouchableOpacity onPress={open} activeOpacity={0.8} accessibilityLabel="Open ID document">
+      {/^image\//.test(d.type)
+        ? <Image source={{ uri: api.attachmentUrl(pin, d.id) }} style={{ width: size, height: size, borderRadius: 8, backgroundColor: C.line }} />
+        : <View style={{ width: size, height: size, borderRadius: 8, backgroundColor: C.bone, alignItems: 'center', justifyContent: 'center' }}><Text style={{ fontFamily: F.bold, fontSize: 11, color: C.bark }}>PDF</Text></View>}
+    </TouchableOpacity>
+  );
+}
+
 function FromHostPick({ data, askUnit, resold, onPick, onCreated }: {
   data?: HostsData; askUnit: boolean; resold?: boolean; onPick: (h: Host) => void; onCreated: (hostId: number, unitId: number, unit: string, name: string) => void;
 }) {
@@ -1004,6 +1058,11 @@ const st = StyleSheet.create({
   moneySum: { marginTop: 4, padding: 12, borderRadius: 14, backgroundColor: C.greenbg, gap: 2 },
   moneySumT: { fontFamily: F.xbold, fontSize: 15, color: C.green },
   moneySumS: { fontFamily: F.semi, fontSize: 12.5, color: C.ink },
+  filled: { padding: 12, borderRadius: 14, backgroundColor: C.greenbg, marginBottom: 12 },
+  filledT: { fontFamily: F.xbold, fontSize: 14, color: C.ink },
+  filledS: { fontFamily: F.med, fontSize: 12, color: C.bark, marginTop: 2 },
+  filledNames: { fontFamily: F.semi, fontSize: 13, color: C.green, marginTop: 6 },
+  thumbLbl: { fontFamily: F.med, fontSize: 10, color: C.bark },
   copyT: { flex: 1, fontFamily: F.semi, fontSize: 12.5, color: C.green },
   gNum: { width: 22, height: 22, borderRadius: 11, backgroundColor: C.navy, alignItems: 'center', justifyContent: 'center' },
   gNumTxt: { color: '#fff', fontFamily: F.bold, fontSize: 11 },

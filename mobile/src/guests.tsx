@@ -2,10 +2,11 @@
    booking (lead, co-guest or further guest), with what we last knew about
    them, and a name box that suggests matches as you type. */
 import React, { useMemo, useState } from 'react';
-import { StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Image, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { C, F, G } from './theme';
 import { useStore } from './store';
-import { ciParse, dayKeyOf, parseExtraGuests } from './logic';
+import { ciParse, dayKeyOf, frontForGuest, parseExtraGuests } from './logic';
+import { api } from './api';
 
 export type KnownGuest = {
   name: string;
@@ -99,6 +100,7 @@ export function GuestNameInput({ value, onChange, onPick, dir, exclude, placehol
   exclude: string[];            // names already on this booking
   placeholder?: string;
 }) {
+  const s = useStore();
   const [focus, setFocus] = useState(false);
   const list = focus ? matches(dir, value, exclude) : [];
   return (
@@ -128,10 +130,21 @@ export function GuestNameInput({ value, onChange, onPick, dir, exclude, placehol
               activeOpacity={0.7}
               onPress={() => { onPick(g); setFocus(false); }}
             >
-              <View style={st.avatar}><Text style={st.avatarTxt}>{g.name.slice(0, 1).toUpperCase()}</Text></View>
+              {(() => {
+                /* Their own ID photo from the last stay, so the right person is recognisable. */
+                const docs = ((s.idDocs || {})[String(g.lastRow)] || []) as { id: number; slot: string; type: string }[];
+                const mine = docs.find((d) => d.slot === frontForGuest(g.lastPos || 1) && /^image\//.test(d.type));
+                return mine
+                  ? <Image source={{ uri: api.attachmentUrl(s.pin, mine.id) }} style={st.idAvatar} />
+                  : <View style={st.avatar}><Text style={st.avatarTxt}>{g.name.slice(0, 1).toUpperCase()}</Text></View>;
+              })()}
               <View style={{ flex: 1 }}>
                 <Text style={st.name} numberOfLines={1}>{g.name}</Text>
                 {g.party.length ? <Text style={st.party} numberOfLines={1}>{'with ' + g.party.map((x) => x.name).join(', ')}</Text> : null}
+                {(() => {
+                  const n = (((s.idDocs || {})[String(g.lastRow)] || []) as { slot: string }[]).filter((d) => !/-back$/.test(d.slot)).length;
+                  return n ? <Text style={st.ids}>{n + ' ID' + (n === 1 ? '' : 's') + ' on file'}</Text> : null;
+                })()}
                 <Text style={st.meta} numberOfLines={1}>
                   {[g.birthYr && 'b. ' + g.birthYr, g.phone, g.stays + ' stay' + (g.stays === 1 ? '' : 's'),
                     g.lastKey && 'last ' + fmt(g.lastKey) + (g.lastUnit ? ' · ' + g.lastUnit : g.lastProp ? ' · ' + g.lastProp : '')]
@@ -161,6 +174,8 @@ const st = StyleSheet.create({
   avatar: { width: 30, height: 30, borderRadius: 15, backgroundColor: 'rgba(233,185,110,0.22)', alignItems: 'center', justifyContent: 'center' },
   avatarTxt: { fontFamily: F.xbold, fontSize: 13, color: G.gold3 },
   name: { fontFamily: F.bold, fontSize: 14, color: C.ink },
+  idAvatar: { width: 40, height: 40, borderRadius: 10, backgroundColor: C.line },
+  ids: { fontFamily: F.bold, fontSize: 11, color: C.green, marginTop: 1 },
   party: { fontFamily: F.semi, fontSize: 11.5, color: C.blue2, marginTop: 1 },
   meta: { fontFamily: F.med, fontSize: 11.5, color: C.bark, marginTop: 1 },
   now: { fontFamily: F.bold, fontSize: 10.5, color: C.green, backgroundColor: C.greenbg, paddingVertical: 3, paddingHorizontal: 8, borderRadius: 999, overflow: 'hidden' },
