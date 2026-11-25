@@ -266,7 +266,9 @@ const worker = {
       /* Only an Admin's update or delete is written straight away; anyone
          else's is validated and parked as a ticket for their manager. */
       const spec = TICKET_SPECS[p.action];
-      if (spec && !me.isAdmin) {
+      /* Review status is the property manager's own call — no approval. The
+         spec stays so requests raised before this change can still be decided. */
+      if (spec && !me.isAdmin && !NO_APPROVAL.has(p.action)) {
         /* Settling payouts is the one bulk action: it becomes one request per
            booking (see raisePayoutTickets). */
         if (p.action === 'setPayouts') return reply(p, await raisePayoutTickets(env, me, payload));
@@ -1467,6 +1469,9 @@ function reviewStatusOf(status) {
   if (!REVIEW_STATUSES.has(st)) bad('Invalid review status: ' + status);
   return st;
 }
+/* Actions anyone holding the right applies directly, Admin or not. */
+const NO_APPROVAL = new Set(['setReviewStatus']);
+
 async function setReviewStatus(env, pin, row, status) {
   checkRow(row);
   const st = reviewStatusOf(status);
