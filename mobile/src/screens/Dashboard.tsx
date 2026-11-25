@@ -167,6 +167,24 @@ export default function Dashboard() {
               />
             </View>
           </View>
+          {/* Where revenue lands: the day it was booked, or the nights it was
+              stayed. Expenses are the same either way. */}
+          <Text style={[st.tLbl, { marginTop: 12 }]}>Count revenue by</Text>
+          <View style={st.basisSeg}>
+            {([['booked', 'Booking date'], ['stay', 'Stay dates']] as const).map(([kk, lbl]) => {
+              const on = s.revBasis === kk;
+              return (
+                <TouchableOpacity key={kk} style={[st.basisBtn, on && st.basisOn]} activeOpacity={0.8}
+                  accessibilityRole="tab" accessibilityState={{ selected: on }}
+                  onPress={() => { if (!on) s.setRevBasis(kk); }}>
+                  <Text style={[st.basisTxt, on && st.basisTxtOn]}>{lbl}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+          <Text style={st.basisHint}>{s.revBasis === 'stay'
+            ? 'Each booking’s net is spread over the nights stayed, so a stay across two months is split between them.'
+            : 'Each booking’s whole net counts on the day it was booked.'}</Text>
           {s.rangeSel === 'custom' && (
             <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
               <View style={{ flex: 1 }}>
@@ -195,7 +213,8 @@ export default function Dashboard() {
 
         {/* overall KPIs */}
         {(canMoney || canBk) && <>
-        <KpiH>{rangeText(s.rangeSel, s.rFrom, s.rTo)}</KpiH>
+        <KpiH>{rangeText(s.rangeSel, s.rFrom, s.rTo) + (s.revBasis === 'stay' ? ' · by stay dates' : ' · by booking date')}</KpiH>
+        {s.revBasis === 'stay' && d.unplaced ? <Hint>{d.unplaced + ' booking' + (d.unplaced === 1 ? ' has' : 's have') + ' no check-in date — counted on the booking date.'}</Hint> : null}
         <View style={st.kpis}>
           {canMoney && <KpiCard kind="rev" label="Total Revenue" value={inr(k.totalRev)} onPress={() => setDrill({ kind: 'metric', metric: 'revenue' })} />}
           {canMoney && <KpiCard kind="exp" label="Total Expense" value={inr(k.totalExp)} onPress={() => setDrill({ kind: 'metric', metric: 'expense' })} />}
@@ -302,7 +321,7 @@ export default function Dashboard() {
 
         {/* monthly PnL */}
         {canMoney && <Panel>
-          <PanelTitle>Monthly P&L (recurring + operating)</PanelTitle>
+          <PanelTitle>{'Monthly P&L (recurring + operating)' + (s.revBasis === 'stay' ? ' · revenue by stay dates' : '')}</PanelTitle>
           <STable
             headers={[{ t: 'Month' }, { t: 'Bk', num: true }, { t: 'Revenue', num: true }, { t: 'Expense', num: true }, { t: 'Net P&L', num: true }]}
             rows={pnl.map((x) => [
@@ -569,7 +588,7 @@ function DrillSheet({ drill, onClose, cash, sav, pb }: { drill: Drill; onClose: 
       body = (<><H4>By type</H4><TypeTable obj={d.byType || {}} /><H4>By channel</H4><ChTable obj={d.byChannel || {}} /></>);
     } else if (metric === 'mrevenue') {
       title = mn + ' · Revenue'; value = inr(m.totalRev);
-      body = (<><H4>Net revenue (₹) · channel × booking type</H4><MxTable mx={cash?.curMatrix || {}} /></>);
+      body = (<><H4>Net revenue (₹) · channel × booking type</H4><MxTable mx={d.monthRevMatrix || cash?.curMatrix || {}} /></>);
     } else if (metric === 'recurring') {
       const list: any[] = d.recurringChecklist || [];
       let matched = 0, addedN = 0;
@@ -728,7 +747,7 @@ function DrillSheet({ drill, onClose, cash, sav, pb }: { drill: Drill; onClose: 
       );
     }
   } else if (drill.kind === 'month') {
-    const r = computeMonthDrill(s.logs?.bookings || null, s.logs?.expenses || null, s.filter, drill.mk);
+    const r = computeMonthDrill(s.logs?.bookings || null, s.logs?.expenses || null, s.filter, drill.mk, s.revBasis);
     const mnn = drill.mk === '*' ? 'All months' : drill.mk;
     if (drill.metric === 'bk') {
       title = mnn + ' · Bookings'; value = String(r.bk);
@@ -788,6 +807,12 @@ function DrillSheet({ drill, onClose, cash, sav, pb }: { drill: Drill; onClose: 
 }
 
 const st = StyleSheet.create({
+  basisSeg: { flexDirection: 'row', backgroundColor: C.bone, borderRadius: 12, padding: 3, marginTop: 6 },
+  basisBtn: { flex: 1, paddingVertical: 8, borderRadius: 10, alignItems: 'center' },
+  basisOn: { backgroundColor: '#fff', shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 4, shadowOffset: { width: 0, height: 1 } },
+  basisTxt: { fontFamily: F.semi, fontSize: 13, color: C.bark },
+  basisTxtOn: { fontFamily: F.bold, color: C.ink },
+  basisHint: { fontFamily: F.med, fontSize: 11.5, color: C.muted, marginTop: 6 },
   tLbl: { fontSize: 12, fontFamily: F.semi, color: C.muted, marginBottom: 5 },
   kpis: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 18 },
   /* Same amber panel the forms and the log use for "waiting for approval", so

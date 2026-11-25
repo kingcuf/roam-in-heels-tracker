@@ -21,6 +21,7 @@ const userQs = () => (API_USER ? '&user=' + encodeURIComponent(API_USER) : '');
 type Args = {
   pin: string;
   want?: string;
+  basis?: string;
   property?: string;
   from?: string;
   to?: string;
@@ -52,6 +53,7 @@ async function call(action: string, a: Args): Promise<any> {
      query string — so the worker read `Number(p.ticket) || 0` = 0, found no
      request to revise, and raised a second one every time. Resubmitting a
      new-record request silently duplicated it (same guest, two amounts). */
+  if (a.basis !== undefined) u += '&basis=' + encodeURIComponent(a.basis);
   if (a.want !== undefined) u += '&want=' + encodeURIComponent(a.want);
   if (a.ticket) u += '&ticket=' + encodeURIComponent(String(a.ticket));
 
@@ -105,8 +107,10 @@ function postForm(url: string, fd: FormData, timeoutMs: number): Promise<any> {
 
 export const api = {
   login: (pin: string) => call('login', { pin }),
-  getDashboard: (pin: string, property: string, from: string, to: string) =>
-    call('dashboard', { pin, property, from, to }),
+  /* basis: where a booking's money lands — 'booked' (Booking Date) or 'stay'
+     (spread over the nights stayed). Expenses are the same on both. */
+  getDashboard: (pin: string, property: string, from: string, to: string, basis: 'booked' | 'stay' = 'booked') =>
+    call('dashboard', { pin, property, from, to, basis }),
   getProperties: (pin: string) => call('properties', { pin }),
   /* Booking checklists. Steps and ticks ride along on getLogs() as logs.checklist. */
   addChecklistItem: (pin: string, d: { scope: 'property' | 'booking'; property?: string; row?: number; preset?: string; label?: string; stage?: string }) =>

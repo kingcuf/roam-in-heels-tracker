@@ -181,6 +181,9 @@ type StoreT = {
   setFilter: (f: string) => void;
   rangeSel: RangeSel;
   setRangeSel: (r: RangeSel) => void;
+  /* Report revenue basis: Booking Date vs stay dates. Remembered per browser. */
+  revBasis: 'booked' | 'stay';
+  setRevBasis: (b: 'booked' | 'stay') => void;
   rFrom: string;
   setRFrom: (s: string) => void;
   rTo: string;
@@ -281,6 +284,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [logs, setLogs] = useState<Logs | null>(null);
   const [filter, setFilter] = useState('All');
   const [rangeSel, setRangeSel] = useState<RangeSel>('all');
+  const BASIS_KEY = 'spira_rev_basis';
+  const [revBasis, setRevBasisS] = useState<'booked' | 'stay'>(() => {
+    try { return Platform.OS === 'web' && globalThis.localStorage?.getItem(BASIS_KEY) === 'stay' ? 'stay' : 'booked'; } catch { return 'booked'; }
+  });
+  const basisRef = useRef(revBasis);
+  const setRevBasis = (b: 'booked' | 'stay') => {
+    basisRef.current = b; setRevBasisS(b);
+    try { if (Platform.OS === 'web') globalThis.localStorage?.setItem(BASIS_KEY, b); } catch {}
+    load(undefined, REPORT_PARTS);
+  };
   const [rFrom, setRFrom] = useState('');
   const [rTo, setRTo] = useState('');
   const [busyN, setBusyN] = useState(0);
@@ -409,7 +422,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     inc();
     try {
       const [d, l, iv, pr, tk, who] = await Promise.all([
-        parts.dash && report ? api.getDashboard(p, f, from, to) : Promise.resolve(null),
+        parts.dash && report ? api.getDashboard(p, f, from, to, basisRef.current) : Promise.resolve(null),
         parts.logs ? fetchLogsRaw(p) : Promise.resolve(null),
         // inventory is non-fatal: a failure here must not blank the dashboard
         parts.inv ? fetchInv(p).catch(() => null) : Promise.resolve(null),
@@ -610,7 +623,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       setFocusTicket(id ?? null); setMineSig((n) => n + 1); setTab('team'); maybeReloadTickets();
     },
     props, dash, logs,
-    filter, setFilter, rangeSel, setRangeSel, rFrom, setRFrom, rTo, setRTo,
+    filter, setFilter, rangeSel, setRangeSel, rFrom, setRFrom, rTo, setRTo, revBasis, setRevBasis,
     busy: busyN > 0, refresh, refreshWrite, refreshReport, reloadLogs, maybeReloadLogs, needLogs,
     /* Opening a record from anywhere picks up this user's live update request
        on it, unless the caller already passed one. */

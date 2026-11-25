@@ -293,7 +293,7 @@ const worker = {
         case 'updateUser':     checkRow(row); out = await updateUser(env, me, row, payload); break;
         case 'setRoleRights':  out = await setRoleRights(env, payload); break;
         case 'changePin':      out = await changePin(env, me, payload); break;
-        case 'dashboard':      out = redactDashboard(await getDashboard(env, pin, p.property, p.from, p.to), me); break;
+        case 'dashboard':      out = redactDashboard(await getDashboard(env, pin, p.property, p.from, p.to, p.basis === 'stay' ? 'stay' : 'booked'), me); break;
         case 'targets':        out = await getTargets(env); break;
         case 'addChecklistItem':    out = await addChecklistItem(env, me, payload); break;
         case 'removeChecklistItem': out = await removeChecklistItem(env, me, payload); break;
@@ -576,7 +576,33 @@ async function updateProperty(env, pin, d) {
    version, so the response shape and every rounding/bucketing quirk stay
    identical. At a few hundred rows the cost is negligible; if the dataset ever
    grows past ~50k rows, push the sums down into SQL. */
-async function getDashboard(env, pin, property, fromISO, toISO) {
+/* Where a booking's money lands on the calendar — the Report's basis switch.
+     booked — all of it on the Booking Date ("what did we sell this month").
+     stay   — spread evenly over the nights stayed, check-in up to but not
+              including check-out ("what did the flats earn this month"), so a
+              stay across 30 Nov → 2 Dec puts one night in Nov, one in Dec.
+              Day use / Pass / no check-out: all on check-in day. No check-in
+              date at all: falls back to the booking date (counted in
+              `unplaced` so the app can say so) rather than vanishing.
+   Same rule as the app's revenueByDay('stay'). Each piece carries `first`, so
+   the booking is counted once — on its first piece (check-in) — while the
+   money follows the nights. Expenses are not affected by the basis. */
+const ISO_D = /^\d{4}-\d{2}-\d{2}/;
+function pieceDates(r, basis) {
+  const bd = r.booking_date || '';
+  /* A row with no date still counts in an all-time view (it always has); a
+     range filter drops it, as before. */
+  if (basis !== 'stay') return { list: [bd], unplaced: false };
+  const ci = String(r.checkin_date || '').slice(0, 10), co = String(r.checkout_date || '').slice(0, 10);
+  if (!ISO_D.test(ci)) return { list: [bd], unplaced: true };
+  if (!ISO_D.test(co) || co <= ci) return { list: [ci], unplaced: false };
+  const out = [];
+  const d = new Date(ci + 'T00:00:00Z'), end = new Date(co + 'T00:00:00Z');
+  while (d < end && out.length < 400) { out.push(d.toISOString().slice(0, 10)); d.setUTCDate(d.getUTCDate() + 1); }
+  return { list: out, unplaced: false };
+}
+
+async function getDashboard(env, pin, property, fromISO, toISO, basis = 'booked') {
   const fp = (property && property !== 'All') ? String(property) : null;
   const curKey = todayISO().slice(0, 7);
 
@@ -607,29 +633,44 @@ async function getDashboard(env, pin, property, fromISO, toISO) {
      per-unit views still sum to exactly the all-properties total. */
   const bookings = scopeBookings(bAll.filter(r => r.booking_id), fp);
   const exp      = eAll.filter(r => !fp || r.property === fp);
-  const bookingsR = hasRange ? bookings.filter(x => inR(x.r.booking_date)) : bookings;
+  /* Each booking becomes one piece (booked basis) or one piece per night
+     (stay basis); every money figure below is built from pieces. */
+  let unplaced = 0;
+  const pieces = [];
+  for (const x of bookings) {
+    const { list, unplaced: u } = pieceDates(x.r, basis);
+    if (u) unplaced++;
+    const each = list.length ? 1 / list.length : 0;
+    list.forEach((d, i) => pieces.push({ x, d, frac: each, first: i === 0 }));
+  }
+  const piecesR = hasRange ? pieces.filter(p => inR(p.d)) : pieces;
   const expR      = hasRange ? exp.filter(r => inR(expDate(r)))            : exp;
-  const ownCount  = (list) => list.reduce((n, x) => n + (x.own ? 1 : 0), 0);
 
   /* range-scoped: top KPIs, breakdown tables, drills */
   let stay = 0, resold = 0, pass = 0;
   const byType = { Stay: {c:0,net:0}, Resold: {c:0,net:0}, Pass: {c:0,net:0} };
   const byChannel = {}, dayMap = {}, revMatrix = {};
-  for (const x of bookingsR) {
-    const r = x.r;
-    const type = r.booking_type, ch = r.channel || '(none)', net = x.share(r.net_earned), d = r.booking_date;
+  let bookingsInRange = 0;
+  for (const pc of piecesR) {
+    const x = pc.x, r = x.r;
+    const type = r.booking_type, ch = r.channel || '(none)', net = x.share(r.net_earned) * pc.frac, d = pc.d;
     /* Money follows the attribution; the count stays with the unit that took
-       the booking, so a booking is never counted twice across the two views. */
-    if (byType[type]) { if (x.own) byType[type].c++; byType[type].net += net; }
+       the booking, so a booking is never counted twice across the two views —
+       and only on its first piece, so a 3-night stay counts once. */
+    const cnt = x.own && pc.first ? 1 : 0;
+    bookingsInRange += cnt;
+    if (byType[type]) { byType[type].c += cnt; byType[type].net += net; }
     if (type === 'Stay') stay += net; else if (type === 'Resold') resold += net; else if (type === 'Pass') pass += net;
-    byChannel[ch] = byChannel[ch] || {c:0,net:0}; if (x.own) byChannel[ch].c++; byChannel[ch].net += net;
+    byChannel[ch] = byChannel[ch] || {c:0,net:0}; byChannel[ch].c += cnt; byChannel[ch].net += net;
     if (!revMatrix[ch]) revMatrix[ch] = { Stay: 0, Resold: 0, Pass: 0 };
     if (revMatrix[ch][type] !== undefined) revMatrix[ch][type] += net;
     if (d) {
-      dayMap[d] = dayMap[d] || {c:0,stay:0,comm:0}; if (x.own) dayMap[d].c++;
+      dayMap[d] = dayMap[d] || {c:0,stay:0,comm:0}; dayMap[d].c += cnt;
       if (type === 'Stay') dayMap[d].stay += net; else dayMap[d].comm += net;
     }
   }
+  const inRangeSet = new Set(piecesR.map(p => p.x));
+  const bookingsR = hasRange ? bookings.filter(x => inRangeSet.has(x)) : bookings;
   const commission = resold + pass, totalRev = stay + commission;
   const daily = Object.keys(dayMap).sort().map(k => ({
     date: ddMMM(k), bookings: dayMap[k].c, stay: dayMap[k].stay,
@@ -658,15 +699,18 @@ async function getDashboard(env, pin, property, fromISO, toISO) {
   /* full / month-scoped (independent of the range): current-month row, trend, checklist */
   const monthMap = {}, recurMonthMap = {};
   const monthByType = { Stay: {c:0,net:0}, Resold: {c:0,net:0}, Pass: {c:0,net:0} };
-  const monthByChannel = {};
-  for (const x of bookings) {
-    const r = x.r, d = r.booking_date; if (!d) continue;
-    const mk = d.slice(0, 7), type = r.booking_type, ch = r.channel || '(none)', net = x.share(r.net_earned);
-    monthMap[mk] = monthMap[mk] || {c:0,stay:0,comm:0}; if (x.own) monthMap[mk].c++;
+  const monthByChannel = {}, monthRevMatrix = {};
+  for (const pc of pieces) {
+    const x = pc.x, r = x.r, d = pc.d; if (!d) continue;
+    const mk = d.slice(0, 7), type = r.booking_type, ch = r.channel || '(none)', net = x.share(r.net_earned) * pc.frac;
+    const cnt = x.own && pc.first ? 1 : 0;
+    monthMap[mk] = monthMap[mk] || {c:0,stay:0,comm:0}; monthMap[mk].c += cnt;
     if (type === 'Stay') monthMap[mk].stay += net; else monthMap[mk].comm += net;
     if (mk === curKey) {
-      if (monthByType[type]) { if (x.own) monthByType[type].c++; monthByType[type].net += net; }
-      monthByChannel[ch] = monthByChannel[ch] || {c:0,net:0}; if (x.own) monthByChannel[ch].c++; monthByChannel[ch].net += net;
+      if (monthByType[type]) { monthByType[type].c += cnt; monthByType[type].net += net; }
+      monthByChannel[ch] = monthByChannel[ch] || {c:0,net:0}; monthByChannel[ch].c += cnt; monthByChannel[ch].net += net;
+      if (!monthRevMatrix[ch]) monthRevMatrix[ch] = { Stay: 0, Resold: 0, Pass: 0 };
+      if (monthRevMatrix[ch][type] !== undefined) monthRevMatrix[ch][type] += net;
     }
   }
   let expMonthRecur = 0, expMonthOper = 0; const monthRecur = [];
@@ -700,11 +744,12 @@ async function getDashboard(env, pin, property, fromISO, toISO) {
   });
 
   return {
-    kpis:    { totalRev, totalExp, netPnL: totalRev - totalExp, bookings: ownCount(bookingsR), deposits },
+    kpis:    { totalRev, totalExp, netPnL: totalRev - totalExp, bookings: bookingsInRange, deposits },
+    basis, unplaced,
     revenue: { stay, commission, total: totalRev },
     expenses:{ oneTime, recurring, operating, total: totalExp, deposits },
     byType, byChannel, monthlyPnl, daily, recent,
-    recurringChecklist, expenseByCategory, monthByType, monthByChannel, revMatrix,
+    recurringChecklist, expenseByCategory, monthByType, monthByChannel, revMatrix, monthRevMatrix,
     kpisMonth: { totalRev: cmRev, totalExp: expMonthTotal, recurExp: expMonthRecur,
                  operExp: expMonthOper, netPnL: cmRev - expMonthTotal, bookings: cm.c },
     currentMonth: MMMyyyy(curKey),
@@ -723,7 +768,7 @@ function redactDashboard(d, me) {
   if (!money) {
     d.kpis.totalRev = d.kpis.totalExp = d.kpis.netPnL = null;
     d.kpisMonth.totalRev = d.kpisMonth.totalExp = d.kpisMonth.recurExp = d.kpisMonth.operExp = d.kpisMonth.netPnL = null;
-    d.revenue = null; d.monthlyPnl = []; d.daily = []; d.revMatrix = null;
+    d.revenue = null; d.monthlyPnl = []; d.daily = []; d.revMatrix = null; d.monthRevMatrix = null;
   }
   if (!bk) {
     d.kpis.bookings = null; d.kpisMonth.bookings = null;

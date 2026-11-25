@@ -702,8 +702,28 @@ export function computePayback(e: LogBlock | null, cash: Cash, filter: string): 
 }
 
 /* ── Monthly P&L per-month drill (same basis as the table) ── */
+/* A booking's money as month pieces, on either basis — mirrors the Worker's
+   pieceDates(): booked = one piece on the Booking Date; stay = one piece per
+   night (check-in up to check-out), day use on check-in, no check-in falls
+   back to the booking date. `first` marks the piece that counts the booking. */
+export function monthPieces(c: any[], basis: RevBasis): { mk: string; frac: number; first: boolean }[] {
+  const byBooking = () => { const l = ciMonthLabel(c); return l ? [{ mk: l, frac: 1, first: true }] : []; };
+  if (basis !== 'stay') return byBooking();
+  const ci = ciParse(c[20]);
+  if (!ci) return byBooking();
+  const co = ciParse(c[21]);
+  const nights = co ? Math.round((co.getTime() - ci.getTime()) / 86400000) : 0;
+  if (nights <= 0) return [{ mk: CI_MON[ci.getMonth()] + ' ' + ci.getFullYear(), frac: 1, first: true }];
+  const out: { mk: string; frac: number; first: boolean }[] = [];
+  for (let i = 0; i < Math.min(nights, 400); i++) {
+    const d = new Date(ci.getFullYear(), ci.getMonth(), ci.getDate() + i);
+    out.push({ mk: CI_MON[d.getMonth()] + ' ' + d.getFullYear(), frac: 1 / nights, first: i === 0 });
+  }
+  return out;
+}
+
 export function computeMonthDrill(
-  ci: LogBlock | null, ex: LogBlock | null, filter: string, mk: string
+  ci: LogBlock | null, ex: LogBlock | null, filter: string, mk: string, basis: RevBasis = 'booked'
 ) {
   const all = mk === '*';
   const byType: Record<string, { c: number; net: number }> = {
@@ -721,19 +741,23 @@ export function computeMonthDrill(
       if (!c) return;
       const sc = scopeBooking(c, filter);
       if (!sc) return;
-      const mlbl = ciMonthLabel(c);
-      if (!mlbl) return;
-      if (!all && mlbl !== mk) return;
-      const net = sc.share(ciNum(c[9])), ty = c[3], ch = c[4] || '(none)';
+      const ty = c[3], ch = c[4] || '(none)';
       /* Money is attributed, the booking is not: it stays counted against the
          unit that took it, so the per-unit counts still add up to the real
-         total while the revenue moves to whoever earned it. */
-      if (sc.own) bk++;
-      rev += net;
-      if (byType[ty]) { if (sc.own) byType[ty].c++; byType[ty].net += net; }
-      byChan[ch] = byChan[ch] || { c: 0, net: 0 }; if (sc.own) byChan[ch].c++; byChan[ch].net += net;
-      mx[ch] = mx[ch] || { Stay: 0, Resold: 0, Pass: 0 };
-      if ((mx[ch] as any)[ty] !== undefined) (mx[ch] as any)[ty] += net;
+         total while the revenue moves to whoever earned it. On the stay
+         basis the money is the nights falling in this month; the booking is
+         counted in the month it checks in. */
+      monthPieces(c, basis).forEach((pc) => {
+        if (!all && pc.mk !== mk) return;
+        const net = sc.share(ciNum(c[9])) * pc.frac;
+        const cnt = sc.own && pc.first ? 1 : 0;
+        bk += cnt;
+        rev += net;
+        if (byType[ty]) { byType[ty].c += cnt; byType[ty].net += net; }
+        byChan[ch] = byChan[ch] || { c: 0, net: 0 }; byChan[ch].c += cnt; byChan[ch].net += net;
+        mx[ch] = mx[ch] || { Stay: 0, Resold: 0, Pass: 0 };
+        if ((mx[ch] as any)[ty] !== undefined) (mx[ch] as any)[ty] += net;
+      });
     });
   }
   let rec = 0, op = 0;
