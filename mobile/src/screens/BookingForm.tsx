@@ -824,10 +824,16 @@ export default function BookingForm() {
                 hint={dealHost ? 'What ' + dealHost.name.split(' ')[0] + ' pays you — your net earning.' : 'What the host pays you — your net earning.'}>
                 <TxtInput value={f.net} onChange={set('net')} money onFocus={() => revealCard('money')} />
               </Field>
+              <Field label="Pending amount (₹)"
+                hint={'Part of the pass amount ' + (dealHost ? dealHost.name.split(' ')[0] : 'the host') + ' hasn’t paid yet.'}>
+                <TxtInput value={f.pending} onChange={set('pending')} money onFocus={() => revealCard('money')} />
+              </Field>
               {isMoneyText(f.net) && f.net !== '' ? (
                 <View style={st.moneySum}>
                   <Text style={st.moneySumT}>{'You earn ' + inr(moneyNum(f.net))}</Text>
                   {dealHost ? <Text style={st.moneySumS}>{'Added to ' + dealHost.name.split(' ')[0] + '’s ledger as owed to you'}</Text> : null}
+                  {isMoneyText(f.pending) && moneyNum(f.pending) > 0
+                    ? <Text style={st.moneySumS}>{inr(moneyNum(f.pending)) + ' still pending'}</Text> : null}
                 </View>
               ) : null}
             </>
