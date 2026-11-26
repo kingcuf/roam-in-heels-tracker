@@ -18,10 +18,9 @@
 
 export type IntroMode = 'every-launch' | 'once-a-day';
 
-/* The owner's decision (18-Sep-2026): the film plays every launch, as shipped.
-   The 'once-a-day' path stays here, unused, so the choice can be revisited by
-   changing this one word rather than rebuilding it. */
-export const INTRO_MODE: IntroMode = 'every-launch';
+/* The owner's decision (26-Nov-2026, replacing 18-Sep's 'every-launch'): the
+   film plays on the first open of each day only. Revert by changing this word. */
+export const INTRO_MODE: IntroMode = 'once-a-day';
 
 const KEY = 'spira_intro_day';   // the day the film last played in full
 

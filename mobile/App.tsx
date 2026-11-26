@@ -341,7 +341,7 @@ export default function App() {
      sign-in screen waiting forever for a cue that was never coming. */
   const [intro, setIntro] = React.useState(() => {
     const play = shouldPlayIntro();
-    if (play) introStarted();
+    if (play) { introStarted(); markIntroPlayed(); }   // counts once it starts
     return play;
   });
   const [fontsLoaded] = useFonts({
@@ -361,7 +361,7 @@ export default function App() {
           <Root />
           {/* The app's own answer to "are you sure?", in place of the phone's. */}
           <ConfirmHost />
-          {intro ? <IntroFilm onDone={() => { markIntroPlayed(); setIntro(false); }} /> : null}
+          {intro ? <IntroFilm onDone={() => setIntro(false)} /> : null}
         </StoreProvider>
       </ToastProvider>
     </SafeAreaProvider>
