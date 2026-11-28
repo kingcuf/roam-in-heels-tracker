@@ -391,6 +391,58 @@ function UsageView({ u, admin, onTopUp, onTest }: { u: Usage; admin: boolean; on
   );
 }
 
+/* ── speech to text ──
+   The browser's own recogniser (Chrome, Edge, Safari): free, no AI credit,
+   nothing recorded or stored by us. Words stream into the message box so they
+   can be checked before sending. Where the browser has none (Firefox, the
+   native app) the mic simply isn't shown. */
+const SR: any = Platform.OS === 'web' ? ((globalThis as any).SpeechRecognition || (globalThis as any).webkitSpeechRecognition) : null;
+const LANG_KEY = 'spira_ai_voice_lang';
+type VLang = 'en' | 'hi';
+function useDictation(onText: (t: string) => void, onError: (m: string) => void) {
+  const [on, setOn] = useState(false);
+  const [lang, setLangS] = useState<VLang>(() => { try { return (globalThis.localStorage?.getItem(LANG_KEY) as VLang) || 'en'; } catch { return 'en'; } });
+  const rec = useRef<any>(null);
+  const setLang = (l: VLang) => { setLangS(l); try { globalThis.localStorage?.setItem(LANG_KEY, l); } catch {} };
+  const stop = () => { try { rec.current?.stop(); } catch {} };
+  const start = (base: string) => {
+    if (!SR || on) return;
+    const r = new SR();
+    r.lang = lang === 'hi' ? 'hi-IN' : 'en-IN';
+    r.interimResults = true;
+    r.continuous = false;
+    r.maxAlternatives = 1;
+    const prefix = base.trim() ? base.trim() + ' ' : '';
+    r.onresult = (e: any) => {
+      let t = '';
+      for (let i = 0; i < e.results.length; i++) t += e.results[i][0].transcript;
+      onText(prefix + t);
+    };
+    r.onerror = (e: any) => {
+      const m = e?.error === 'not-allowed' || e?.error === 'service-not-allowed' ? 'Allow microphone access for this site in your browser settings.'
+        : e?.error === 'no-speech' ? 'Didn’t catch that — tap the mic and try again.'
+        : e?.error === 'network' ? 'Speech needs an internet connection.'
+        : e?.error === 'aborted' ? '' : 'Microphone error — try again.';
+      if (m) onError(m);
+    };
+    r.onend = () => { setOn(false); rec.current = null; };
+    rec.current = r;
+    try { r.start(); setOn(true); } catch { setOn(false); }
+  };
+  useEffect(() => () => stop(), []);
+  return { supported: !!SR, on, start, stop, lang, setLang };
+}
+
+function MicIcon({ color }: { color: string }) {
+  return (
+    <Svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <Rect x={9} y={3} width={6} height={11} rx={3} />
+      <Path d="M5 11a7 7 0 0 0 14 0" />
+      <Line x1={12} y1={18} x2={12} y2={21} />
+    </Svg>
+  );
+}
+
 /* ── the screen ── */
 export function AIAnalyst({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const s = useStore();
@@ -474,6 +526,8 @@ export function AIAnalyst({ visible, onClose }: { visible: boolean; onClose: () 
   };
   const remove = (id: string) => { setChats((all) => all.filter((c) => c.id !== id)); if (active === id) setActive('new'); };
   const busyHere = !!pending && (!cur || pending.sid === cur.id);
+  const mic = useDictation((t) => setText(t), (m) => toast(m, false));
+  const sendNow = (t: string) => { if (mic.on) mic.stop(); send(t); };
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose} presentationStyle="fullScreen">
@@ -546,7 +600,7 @@ export function AIAnalyst({ visible, onClose }: { visible: boolean; onClose: () 
                     <View style={st.hero}>
                       <View style={st.heroIcon}><Sparkle size={26} /></View>
                       <Text style={st.heroT}>Ask about your business</Text>
-                      <Text style={st.heroS}>Chat in plain English. Ask follow-ups, and say “generate report” whenever you want it all in one report.</Text>
+                      <Text style={st.heroS}>Type or speak — English, Hindi or Hinglish. Ask follow-ups, and say “generate report” whenever you want it all in one report.</Text>
                     </View>
                     <Text style={st.sectionLbl}>Try asking</Text>
                     {starters.map((q) => (
@@ -575,14 +629,27 @@ export function AIAnalyst({ visible, onClose }: { visible: boolean; onClose: () 
               </ScrollView>
             ) : null}
             {/* composer */}
-            <View style={st.composer}>
+            <View style={[st.composer, mic.on && st.composerOn]}>
+              {mic.supported ? (
+                <TouchableOpacity onPress={() => mic.setLang(mic.lang === 'en' ? 'hi' : 'en')} disabled={mic.on} style={st.langPill}
+                  accessibilityLabel={'Voice language: ' + (mic.lang === 'hi' ? 'Hindi' : 'English') + '. Tap to switch.'}>
+                  <Text style={st.langTxt}>{mic.lang === 'hi' ? 'हिं' : 'EN'}</Text>
+                </TouchableOpacity>
+              ) : null}
               <TextInput
-                value={text} onChangeText={setText} placeholder={cur ? 'Message…' : 'Ask about your business…'}
+                value={text} onChangeText={setText}
+                placeholder={mic.on ? (mic.lang === 'hi' ? 'बोलिए… सुन रहे हैं' : 'Listening… speak now') : cur ? 'Message…' : 'Ask or speak…'}
                 placeholderTextColor={C.muted} style={st.input} multiline numberOfLines={1} maxLength={600}
-                onSubmitEditing={() => send(text)} blurOnSubmit returnKeyType="send"
-                onKeyPress={(e: any) => { if (Platform.OS === 'web' && e.nativeEvent.key === 'Enter' && !e.nativeEvent.shiftKey) { e.preventDefault?.(); send(text); } }}
+                onSubmitEditing={() => sendNow(text)} blurOnSubmit returnKeyType="send"
+                onKeyPress={(e: any) => { if (Platform.OS === 'web' && e.nativeEvent.key === 'Enter' && !e.nativeEvent.shiftKey) { e.preventDefault?.(); sendNow(text); } }}
               />
-              <TouchableOpacity onPress={() => send(text)} disabled={!text.trim() || !!pending}
+              {mic.supported ? (
+                <TouchableOpacity onPress={() => (mic.on ? mic.stop() : mic.start(text))} disabled={!!pending}
+                  style={[st.micBtn, mic.on && st.micOn]} accessibilityLabel={mic.on ? 'Stop listening' : 'Speak your question'}>
+                  {mic.on ? <View style={st.micStop} /> : <MicIcon color={C.ink} />}
+                </TouchableOpacity>
+              ) : null}
+              <TouchableOpacity onPress={() => sendNow(text)} disabled={!text.trim() || !!pending}
                 style={[st.send, (!text.trim() || !!pending) && { opacity: 0.35 }]} accessibilityLabel="Send message">
                 {pending ? <ActivityIndicator color="#fff" size="small" /> : <Text style={st.sendTxt}>↑</Text>}
               </TouchableOpacity>
@@ -701,6 +768,12 @@ const st = StyleSheet.create({
   reportBadgeTxt: { color: G.gold1, fontFamily: F.xbold, fontSize: 10.5, letterSpacing: 1 },
   chipReport: { backgroundColor: C.navy, borderColor: C.navy },
   chipReportTxt: { fontFamily: F.bold, fontSize: 13, color: '#fff' },
+  composerOn: { borderColor: C.red, shadowColor: C.red, shadowOpacity: 0.18 },
+  langPill: { height: 30, minWidth: 34, paddingHorizontal: 8, borderRadius: 15, backgroundColor: C.bone, alignItems: 'center', justifyContent: 'center', alignSelf: 'center', marginLeft: -8 },
+  langTxt: { fontFamily: F.bold, fontSize: 12, color: C.bark },
+  micBtn: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: C.bone },
+  micOn: { backgroundColor: C.red },
+  micStop: { width: 13, height: 13, borderRadius: 3, backgroundColor: '#fff' },
   chips: { paddingHorizontal: 14, paddingTop: 8, paddingBottom: 2, gap: 8 },
   chip: { flexDirection: 'row', alignItems: 'center', gap: 6, maxWidth: 280, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 999,
     backgroundColor: '#fff', borderWidth: 1, borderColor: 'rgba(185,128,54,0.35)' },
