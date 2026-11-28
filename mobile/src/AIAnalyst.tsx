@@ -27,21 +27,44 @@ export type Usage = {
   recent?: { at: string; user: string; model: string; inr: number; cached: boolean; ok: boolean; q: string }[];
 };
 export type Report = {
-  id: string; question: string; title: string; summary: string;
+  kind?: 'report'; question: string; title: string; summary: string;
   kpis: { label: string; value: string; note?: string }[];
   charts: Chart[]; records: { kind: string; rows: any[] } | null;
   insights: string[]; followups: string[];
-  queries: number; ms: number; model: string; at: string;
-  history: { q: string; a: string }[];   // the thread this report was asked in
+  queries: number; ms: number; model: string; at: string; cached?: boolean;
 };
+export type Answer = {
+  kind: 'chat'; question: string; text: string; chart: Chart | null;
+  records: { kind: string; rows: any[] } | null; followups: string[];
+  queries: number; ms: number; at: string; cached?: boolean;
+};
+type Msg =
+  | { id: string; role: 'user'; text: string }
+  | { id: string; role: 'ai'; a: Answer }
+  | { id: string; role: 'report'; r: Report }
+  | { id: string; role: 'error'; text: string; q: string; mode: 'chat' | 'report' };
+type Session = { id: string; title: string; msgs: Msg[]; at: string };
 
-const KEY = 'spira_ai_reports_v1';
-const MAX_KEEP = 20;
-const load = (): Report[] => { try { return JSON.parse(globalThis.localStorage?.getItem(KEY) || '[]'); } catch { return []; } };
-const save = (r: Report[]) => { try { globalThis.localStorage?.setItem(KEY, JSON.stringify(r.slice(0, MAX_KEEP))); } catch {} };
+/* Chats live in this browser only. */
+const KEY = 'spira_ai_chats_v1';
+const MAX_KEEP = 15;
+const load = (): Session[] => { try { return JSON.parse(globalThis.localStorage?.getItem(KEY) || '[]'); } catch { return []; } };
+const save = (r: Session[]) => { try { globalThis.localStorage?.setItem(KEY, JSON.stringify(r.slice(0, MAX_KEEP))); } catch {} };
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
-/* Few and useful: the first two are what an operator asks most, and are the
-   only ones shown on a phone. */
+/* What the model is told about the conversation so far: each question with
+   our own answer text (or the report's summary). Never earlier tool data. */
+function historyOf(msgs: Msg[]) {
+  const out: { q: string; a: string }[] = [];
+  for (let i = 0; i < msgs.length; i++) {
+    const m = msgs[i], n = msgs[i + 1];
+    if (m.role !== 'user' || !n) continue;
+    if (n.role === 'ai') out.push({ q: m.text, a: n.a.text });
+    else if (n.role === 'report') out.push({ q: m.text, a: n.r.title + '. ' + n.r.summary });
+  }
+  return out;
+}
+
 const STARTERS = [
   'How is this month going compared to last month?',
   'Who still owes us money?',
@@ -212,83 +235,77 @@ function RecordsCard({ rec }: { rec: NonNullable<Report['records']> }) {
   );
 }
 
-/* ── one report ── */
-function ReportView({ r, onAsk, busy }: { r: Report; onAsk: (q: string) => void; busy: boolean }) {
+/* ── a report, shown inside the chat when the user asks for one ── */
+function ReportBlock({ r }: { r: Report }) {
   return (
-    <View style={{ gap: 12 }}>
-      <View style={st.qBubble}>
-        <Text style={st.qTxt}>{r.question}</Text>
+    <View style={st.reportWrap}>
+      <View style={st.reportHead}>
+        <View style={st.reportBadge}><Text style={st.reportBadgeTxt}>REPORT</Text></View>
+        <Text style={st.meta2}>{new Date(r.at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}</Text>
       </View>
-      <View style={[st.card, st.answer]}>
-        <View style={st.answerHead}>
-          <Sparkle size={15} />
-          <Text style={st.answerKicker}>ANSWER</Text>
-        </View>
-        <Text style={st.title}>{r.title}</Text>
-        <Text style={st.summary}>{r.summary}</Text>
-      </View>
+      <Text style={st.title}>{r.title}</Text>
+      <Text style={st.summary}>{r.summary}</Text>
       {r.kpis.length ? (
-        <View style={st.kpiGrid}>
+        <View style={[st.kpiGrid, { marginTop: 12 }]}>
           {r.kpis.map((k, i) => (
             <View key={i} style={st.kpi}>
               <Text style={st.kpiLbl} numberOfLines={2}>{k.label}</Text>
               <Text style={st.kpiVal} numberOfLines={1} adjustsFontSizeToFit>{k.value}</Text>
-              {k.note ? <Text style={st.kpiNote} numberOfLines={2}>{k.note}</Text> : null}
+              {k.note ? <Text style={[st.kpiNote, /^\s*[-−–]|\b(down|fell|drop)/i.test(k.note) && { color: C.red }]} numberOfLines={2}>{k.note}</Text> : null}
             </View>
           ))}
         </View>
       ) : null}
-      {r.charts.map((c, i) => <ChartCard key={i} c={c} />)}
-      {r.records && r.records.rows.length ? <RecordsCard rec={r.records} /> : null}
-      {r.insights.length ? (
-        <View style={st.card}>
-          <Text style={[st.cardTitle, { marginBottom: 10 }]}>Insights & trends</Text>
-          {r.insights.map((t, i) => (
-            <View key={i} style={st.insight}>
-              <View style={st.insightDot}><Text style={st.insightN}>{i + 1}</Text></View>
-              <Text style={st.insightTxt}>{t}</Text>
-            </View>
-          ))}
-        </View>
-      ) : null}
-      {r.followups.length ? (
-        <View style={{ gap: 8 }}>
-          <Text style={st.sectionLbl}>Ask next</Text>
-          {r.followups.map((q, i) => (
-            <TouchableOpacity key={i} disabled={busy} onPress={() => onAsk(q)} style={st.follow} activeOpacity={0.7}>
-              <Text style={st.followTxt}>{q}</Text>
-              <Text style={st.followArrow}>↗</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-      ) : null}
-      <Text style={st.meta}>
-        {new Date(r.at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })
-          + ' · ' + r.queries + (r.queries === 1 ? ' query' : ' queries') + ' · ' + (r.ms / 1000).toFixed(1) + 's · AI can make mistakes; figures come from your data'}
-      </Text>
+      <View style={{ gap: 12, marginTop: 12 }}>
+        {r.charts.map((c, i) => <ChartCard key={i} c={c} />)}
+        {r.records && r.records.rows.length ? <RecordsCard rec={r.records} /> : null}
+        {r.insights.length ? (
+          <View style={st.card}>
+            <Text style={[st.cardTitle, { marginBottom: 10 }]}>Insights & trends</Text>
+            {r.insights.map((t, i) => (
+              <View key={i} style={st.insight}>
+                <View style={st.insightDot}><Text style={st.insightN}>{i + 1}</Text></View>
+                <Text style={st.insightTxt}>{t}</Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
+      </View>
     </View>
   );
 }
 
-function Thinking({ q }: { q: string }) {
-  const steps = ['Reading your question', 'Running queries on your data', 'Building charts', 'Writing the report'];
-  const [i, setI] = useState(0);
-  useEffect(() => { const t = setInterval(() => setI((n) => Math.min(n + 1, steps.length - 1)), 2600); return () => clearInterval(t); }, []);
+function AiAvatar() {
+  return <View style={st.avatar}><Sparkle size={13} color={G.gold1} /></View>;
+}
+
+function AnswerBubble({ a }: { a: Answer }) {
   return (
-    <View style={{ gap: 12 }}>
-      <View style={st.qBubble}><Text style={st.qTxt}>{q}</Text></View>
-      <View style={[st.card, { gap: 10 }]}>
-        <View style={st.answerHead}>
+    <View style={st.aiRow}>
+      <AiAvatar />
+      <View style={{ flex: 1, gap: 10 }}>
+        <View style={st.aiBubble}><Text style={st.aiTxt}>{a.text}</Text></View>
+        {a.chart ? <ChartCard c={a.chart} /> : null}
+        {a.records && a.records.rows.length ? <RecordsCard rec={a.records} /> : null}
+      </View>
+    </View>
+  );
+}
+
+function Typing({ report }: { report: boolean }) {
+  const steps = report ? ['Gathering the conversation', 'Running queries', 'Building charts', 'Writing the report'] : ['Thinking', 'Checking your data', 'Writing the answer'];
+  const [i, setI] = useState(0);
+  useEffect(() => { const t = setInterval(() => setI((n) => Math.min(n + 1, steps.length - 1)), 2200); return () => clearInterval(t); }, []);
+  return (
+    <View style={st.aiRow}>
+      <AiAvatar />
+      <View style={{ flex: 1, gap: 10 }}>
+        <View style={[st.aiBubble, { flexDirection: 'row', alignItems: 'center', gap: 8, alignSelf: 'flex-start' }]}>
           <ActivityIndicator size="small" color={C.blue} />
-          <Text style={[st.answerKicker, { color: C.blue }]}>{steps[i].toUpperCase() + '…'}</Text>
+          <Text style={[st.aiTxt, { color: C.bark }]}>{steps[i] + '…'}</Text>
         </View>
-        <Shimmer h={20} w="70%" />
-        <Shimmer h={12} /><Shimmer h={12} w="90%" /><Shimmer h={12} w="60%" />
+        {report ? <View style={st.card}><Shimmer h={18} w="60%" /><Shimmer h={12} style={{ marginTop: 10 }} /><Shimmer h={120} r={14} style={{ marginTop: 12 }} /></View> : null}
       </View>
-      <View style={st.kpiGrid}>
-        {[0, 1].map((k) => <View key={k} style={st.kpi}><Shimmer h={10} w="60%" /><Shimmer h={22} w="80%" style={{ marginTop: 8 }} /></View>)}
-      </View>
-      <View style={st.card}><Shimmer h={150} r={14} /></View>
     </View>
   );
 }
@@ -382,15 +399,22 @@ export function AIAnalyst({ visible, onClose }: { visible: boolean; onClose: () 
   const starters = STARTERS.slice(0, width < 600 ? 2 : 4);
   const admin = s.me?.role === 'Admin' || !s.me?.username;
   const [usage, setUsage] = useState<Usage | null>(null);
-  const [reports, setReports] = useState<Report[]>(() => load());
-  const [active, setActive] = useState<string>('new');
+  const [chats, setChats] = useState<Session[]>(() => load());
+  const [active, setActive] = useState<string>('new');      // session id | 'new' | 'usage'
   const [text, setText] = useState('');
-  const [pending, setPending] = useState<{ q: string; tab: string } | null>(null);
-  const [err, setErr] = useState<{ q: string; msg: string; history: Report['history'] } | null>(null);
+  const [pending, setPending] = useState<{ sid: string; report: boolean } | null>(null);
   const scroll = useRef<React.ComponentRef<typeof ScrollView>>(null);
   const tabsRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
 
-  useEffect(() => { save(reports); }, [reports]);
+  useEffect(() => { save(chats); }, [chats]);
+  const cur = useMemo(() => chats.find((c) => c.id === active) || null, [chats, active]);
+  const lastAns = useMemo(() => {
+    if (!cur) return null;
+    for (let i = cur.msgs.length - 1; i >= 0; i--) { const m = cur.msgs[i]; if (m.role === 'ai') return m.a; if (m.role === 'report') return m.r; }
+    return null;
+  }, [cur]);
+  const hasAnswer = !!cur && cur.msgs.some((m) => m.role === 'ai' || m.role === 'report');
+
   const loadUsage = () => api.aiUsage(s.pin).then((r) => setUsage(r.usage)).catch(() => {});
   useEffect(() => { if (visible) loadUsage(); }, [visible]);
   const topUp = async (n: number) => {
@@ -400,43 +424,56 @@ export function AIAnalyst({ visible, onClose }: { visible: boolean; onClose: () 
   const testMail = async () => {
     try { const r = await api.aiTestAlert(s.pin); toast(r.message); } catch (e: any) { toast(e?.message || 'Could not send', false); }
   };
-  const cur = useMemo(() => reports.find((r) => r.id === active) || null, [reports, active]);
+  const toEnd = () => setTimeout(() => scroll.current?.scrollToEnd({ animated: true }), 60);
+  /* A new report opens at its title, not its last line. */
+  const [focusId, setFocusId] = useState<string | null>(null);
+  const patch = (sid: string, f: (c: Session) => Session) => setChats((all) => all.map((c) => (c.id === sid ? f(c) : c)));
 
-  const ask = async (qRaw: string, history?: Report['history']) => {
-    const q = qRaw.trim();
+  /* Send one message. `mode` 'report' builds a report from the whole chat;
+     anything else is a normal chat answer (the server also spots "generate a
+     report" typed in words). */
+  const send = async (raw: string, mode?: 'chat' | 'report') => {
+    const q = raw.trim();
     if (!q || pending) return;
-    /* Asking from an open report continues its thread; from "New" starts one. */
-    const hist = history ?? (cur ? [...cur.history, { q: cur.question, a: cur.summary }].slice(-4) : []);
-    setText(''); setErr(null);
-    setPending({ q, tab: 'pending' }); setActive('pending');
-    setTimeout(() => scroll.current?.scrollTo({ y: 0, animated: true }), 30);
+    let sid = cur ? cur.id : '';
+    const prior = cur ? cur.msgs : [];
+    if (!sid) {
+      sid = uid();
+      const sess: Session = { id: sid, title: q.length > 42 ? q.slice(0, 40) + '…' : q, msgs: [], at: new Date().toISOString() };
+      setChats((all) => [sess, ...all].slice(0, MAX_KEEP));
+      setActive(sid);
+      setTimeout(() => tabsRef.current?.scrollTo({ x: 0, animated: true }), 30);
+    }
+    const hist = historyOf(prior.filter((m) => m.role !== 'error'));
+    const isReport = mode === 'report' || /\breport\b/i.test(q);
+    setText('');
+    patch(sid, (c) => ({ ...c, msgs: [...c.msgs.filter((m) => m.role !== 'error'), { id: uid(), role: 'user', text: q }] }));
+    setPending({ sid, report: isReport });
+    toEnd();
     try {
-      const r = await api.askAI(s.pin, q, hist);
-      const rep: Report = { ...r.report, id: String(Date.now()), history: hist };
-      setReports((all) => [rep, ...all].slice(0, MAX_KEEP));
+      const r = await api.askAI(s.pin, q, hist, mode);
+      const out = r.report;
+      const msg: Msg = out.kind === 'report' ? { id: uid(), role: 'report', r: out } : { id: uid(), role: 'ai', a: out };
+      patch(sid, (c) => ({ ...c, msgs: [...c.msgs, msg], at: new Date().toISOString() }));
+      if (msg.role === 'report') setFocusId(msg.id);
       if (r.usage) setUsage((u) => ({ ...(u || {}), ...r.usage }));
       if (r.usage && r.usage.pct >= 70) loadUsage();
-      setActive(rep.id);
-      setTimeout(() => tabsRef.current?.scrollTo({ x: 0, animated: true }), 30);
     } catch (e: any) {
-      setErr({ q, msg: e?.message || 'Something went wrong.', history: hist });
-      setActive('error');
+      patch(sid, (c) => ({ ...c, msgs: [...c.msgs, { id: uid(), role: 'error', text: e?.message || 'Something went wrong.', q, mode: mode || 'chat' }] }));
     } finally {
       setPending(null);
-      setTimeout(() => scroll.current?.scrollTo({ y: 0, animated: true }), 30);
+      if (!isReport) toEnd();
     }
   };
-
-  const remove = (id: string) => {
-    setReports((all) => all.filter((r) => r.id !== id));
-    if (active === id) setActive('new');
+  const retry = (m: Extract<Msg, { role: 'error' }>) => {
+    if (!cur) return;
+    /* Drop the failed question and its error, then ask it again. */
+    const msgs = cur.msgs.slice(0, -2);
+    patch(cur.id, (c) => ({ ...c, msgs }));
+    setTimeout(() => send(m.q, m.mode), 0);
   };
-
-  const tabs: { id: string; label: string }[] = [
-    ...(pending ? [{ id: 'pending', label: 'Thinking…' }] : []),
-    ...(err && !pending ? [{ id: 'error', label: 'Didn’t work' }] : []),
-    ...reports.map((r) => ({ id: r.id, label: r.title })),
-  ];
+  const remove = (id: string) => { setChats((all) => all.filter((c) => c.id !== id)); if (active === id) setActive('new'); };
+  const busyHere = !!pending && (!cur || pending.sid === cur.id);
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose} presentationStyle="fullScreen">
@@ -449,25 +486,25 @@ export function AIAnalyst({ visible, onClose }: { visible: boolean; onClose: () 
               <View style={{ flex: 1 }}>
                 <Text style={st.hTitle}>AI Analyst</Text>
                 {usage ? <Meter u={usage} onPress={() => { setActive('usage'); loadUsage(); }} />
-                  : <Text style={st.hSub}>Ask about bookings, revenue, guests & costs</Text>}
+                  : <Text style={st.hSub}>Chat about bookings, revenue, guests & costs</Text>}
               </View>
               <TouchableOpacity onPress={onClose} style={st.close} accessibilityLabel="Close AI Analyst">
                 <Text style={st.closeX}>✕</Text>
               </TouchableOpacity>
             </View>
 
-            {/* report tabs */}
+            {/* chat sessions */}
             <View style={st.tabsBar}><View style={st.col}>
             <ScrollView ref={tabsRef} horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={st.tabs}>
               <TouchableOpacity onPress={() => setActive('new')} style={[st.tab, st.tabNew, active === 'new' && st.tabOn]}>
-                <Text style={[st.tabTxt, active === 'new' && st.tabTxtOn]}>＋ New</Text>
+                <Text style={[st.tabTxt, active === 'new' && st.tabTxtOn]}>＋ New chat</Text>
               </TouchableOpacity>
-              {tabs.map((t) => (
-                <Pressable key={t.id} onPress={() => setActive(t.id)} style={[st.tab, active === t.id && st.tabOn]}>
-                  {t.id === 'pending' ? <ActivityIndicator size="small" color={active === t.id ? '#fff' : C.blue} style={{ marginRight: 6 }} /> : null}
-                  <Text style={[st.tabTxt, active === t.id && st.tabTxtOn]} numberOfLines={1}>{t.label}</Text>
-                  {active === t.id && t.id !== 'pending' ? (
-                    <TouchableOpacity onPress={() => t.id === 'error' ? (setErr(null), setActive('new')) : remove(t.id)} hitSlop={8} accessibilityLabel="Remove report">
+              {chats.map((c) => (
+                <Pressable key={c.id} onPress={() => { setActive(c.id); toEnd(); }} style={[st.tab, active === c.id && st.tabOn]}>
+                  {pending?.sid === c.id ? <ActivityIndicator size="small" color={active === c.id ? '#fff' : C.blue} style={{ marginRight: 6 }} /> : null}
+                  <Text style={[st.tabTxt, active === c.id && st.tabTxtOn]} numberOfLines={1}>{c.title}</Text>
+                  {active === c.id && pending?.sid !== c.id ? (
+                    <TouchableOpacity onPress={() => remove(c.id)} hitSlop={8} accessibilityLabel="Delete chat">
                       <Text style={st.tabX}>✕</Text>
                     </TouchableOpacity>
                   ) : null}
@@ -479,29 +516,41 @@ export function AIAnalyst({ visible, onClose }: { visible: boolean; onClose: () 
             {/* body */}
             <ScrollView ref={scroll} style={{ flex: 1 }} contentContainerStyle={[st.body, st.col]} keyboardShouldPersistTaps="handled">
               {active === 'usage' && usage ? <UsageView u={usage} admin={admin} onTopUp={topUp} onTest={testMail} />
-                : active === 'pending' && pending ? <Thinking q={pending.q} />
-                : active === 'error' && err ? (
-                  <View style={{ gap: 12 }}>
-                    <View style={st.qBubble}><Text style={st.qTxt}>{err.q}</Text></View>
-                    <View style={[st.card, { borderColor: C.redbg }]}>
-                      <Text style={[st.cardTitle, { color: C.red }]}>Couldn’t build this report</Text>
-                      <Text style={[st.summary, { marginTop: 6 }]}>{err.msg}</Text>
-                      <TouchableOpacity onPress={() => ask(err.q, err.history)} style={[st.follow, { marginTop: 12, justifyContent: 'center' }]}>
-                        <Text style={[st.followTxt, { flex: 0, fontFamily: F.bold }]}>Try again</Text>
-                      </TouchableOpacity>
-                    </View>
+                : cur ? (
+                  <View style={{ gap: 14 }}>
+                    {cur.msgs.map((m) => m.role === 'user' ? (
+                      <View key={m.id} style={st.qBubble}><Text style={st.qTxt}>{m.text}</Text></View>
+                    ) : m.role === 'ai' ? <AnswerBubble key={m.id} a={m.a} />
+                      : m.role === 'report' ? (
+                        <View key={m.id} onLayout={(e) => {
+                          if (focusId !== m.id) return;
+                          const y = e.nativeEvent.layout.y;
+                          setFocusId(null);
+                          setTimeout(() => scroll.current?.scrollTo({ y: Math.max(0, y - 8), animated: true }), 30);
+                        }}><ReportBlock r={m.r} /></View>
+                      )
+                      : (
+                        <View key={m.id} style={st.aiRow}>
+                          <AiAvatar />
+                          <View style={[st.aiBubble, { flex: 1, borderColor: C.redbg }]}>
+                            <Text style={[st.aiTxt, { color: C.red }]}>{m.text}</Text>
+                            <TouchableOpacity onPress={() => retry(m)} style={{ marginTop: 6 }}><Text style={st.retry}>Try again</Text></TouchableOpacity>
+                          </View>
+                        </View>
+                      ))}
+                    {busyHere ? <Typing report={!!pending?.report} /> : null}
+                    <Text style={st.meta}>AI can make mistakes · figures come from your own data</Text>
                   </View>
-                ) : cur ? <ReportView r={cur} onAsk={(q) => ask(q)} busy={!!pending} />
-                : (
+                ) : (
                   <View style={{ gap: 14 }}>
                     <View style={st.hero}>
                       <View style={st.heroIcon}><Sparkle size={26} /></View>
                       <Text style={st.heroT}>Ask about your business</Text>
-                      <Text style={st.heroS}>Plain English in, a short report out — answer, charts and what to ask next.</Text>
+                      <Text style={st.heroS}>Chat in plain English. Ask follow-ups, and say “generate report” whenever you want it all in one report.</Text>
                     </View>
                     <Text style={st.sectionLbl}>Try asking</Text>
                     {starters.map((q) => (
-                      <TouchableOpacity key={q} onPress={() => ask(q, [])} style={st.follow} disabled={!!pending} activeOpacity={0.7}>
+                      <TouchableOpacity key={q} onPress={() => send(q)} style={st.follow} disabled={!!pending} activeOpacity={0.7}>
                         <Text style={st.followTxt}>{q}</Text>
                         <Text style={st.followArrow}>↗</Text>
                       </TouchableOpacity>
@@ -510,13 +559,15 @@ export function AIAnalyst({ visible, onClose }: { visible: boolean; onClose: () 
                 )}
             </ScrollView>
 
-            {/* Follow-ups ride above the composer after every answer, so the
-                next question is always one tap away without scrolling. */}
             <View style={st.col}>
-            {cur && !pending && cur.followups.length ? (
+            {/* After every answer: the report action, then the next questions. */}
+            {cur && hasAnswer && !busyHere && active !== 'usage' ? (
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={st.chips} keyboardShouldPersistTaps="handled">
-                {cur.followups.map((q, i) => (
-                  <TouchableOpacity key={i} onPress={() => ask(q)} style={st.chip} activeOpacity={0.75}>
+                <TouchableOpacity onPress={() => send('Generate a report of this conversation', 'report')} style={[st.chip, st.chipReport]} activeOpacity={0.8}>
+                  <Text style={st.chipReportTxt}>▤  Generate report</Text>
+                </TouchableOpacity>
+                {(lastAns?.followups || []).map((q, i) => (
+                  <TouchableOpacity key={i} onPress={() => send(q)} style={st.chip} activeOpacity={0.75}>
                     <Sparkle size={12} />
                     <Text style={st.chipTxt} numberOfLines={1}>{q}</Text>
                   </TouchableOpacity>
@@ -526,13 +577,13 @@ export function AIAnalyst({ visible, onClose }: { visible: boolean; onClose: () 
             {/* composer */}
             <View style={st.composer}>
               <TextInput
-                value={text} onChangeText={setText} placeholder={cur ? 'Ask a follow-up…' : 'Ask about your business…'}
+                value={text} onChangeText={setText} placeholder={cur ? 'Message…' : 'Ask about your business…'}
                 placeholderTextColor={C.muted} style={st.input} multiline numberOfLines={1} maxLength={600}
-                onSubmitEditing={() => ask(text)} blurOnSubmit returnKeyType="send"
-                onKeyPress={(e: any) => { if (Platform.OS === 'web' && e.nativeEvent.key === 'Enter' && !e.nativeEvent.shiftKey) { e.preventDefault?.(); ask(text); } }}
+                onSubmitEditing={() => send(text)} blurOnSubmit returnKeyType="send"
+                onKeyPress={(e: any) => { if (Platform.OS === 'web' && e.nativeEvent.key === 'Enter' && !e.nativeEvent.shiftKey) { e.preventDefault?.(); send(text); } }}
               />
-              <TouchableOpacity onPress={() => ask(text)} disabled={!text.trim() || !!pending}
-                style={[st.send, (!text.trim() || !!pending) && { opacity: 0.35 }]} accessibilityLabel="Send question">
+              <TouchableOpacity onPress={() => send(text)} disabled={!text.trim() || !!pending}
+                style={[st.send, (!text.trim() || !!pending) && { opacity: 0.35 }]} accessibilityLabel="Send message">
                 {pending ? <ActivityIndicator color="#fff" size="small" /> : <Text style={st.sendTxt}>↑</Text>}
               </TouchableOpacity>
             </View>
@@ -639,6 +690,17 @@ const st = StyleSheet.create({
   meta2: { fontFamily: F.med, fontSize: 11, color: C.muted, marginTop: 2 },
   /* On a wide screen the analyst reads as a centred column, like a chat app. */
   col: { width: '100%', maxWidth: 780, alignSelf: 'center' },
+  aiRow: { flexDirection: 'row', gap: 10, alignItems: 'flex-start' },
+  avatar: { width: 28, height: 28, borderRadius: 10, backgroundColor: C.navy, alignItems: 'center', justifyContent: 'center', marginTop: 2 },
+  aiBubble: { backgroundColor: 'rgba(255,255,255,0.92)', borderRadius: 18, borderTopLeftRadius: 6, paddingVertical: 11, paddingHorizontal: 14, borderWidth: 1, borderColor: G.glassEdge },
+  aiTxt: { fontFamily: F.med, fontSize: 14.5, color: C.ink, lineHeight: 22 },
+  retry: { fontFamily: F.bold, fontSize: 13, color: C.blue },
+  reportWrap: { backgroundColor: 'rgba(255,255,255,0.6)', borderRadius: 22, padding: 14, borderWidth: 1, borderColor: 'rgba(185,128,54,0.3)' },
+  reportHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
+  reportBadge: { backgroundColor: C.navy, borderRadius: 8, paddingVertical: 3, paddingHorizontal: 8 },
+  reportBadgeTxt: { color: G.gold1, fontFamily: F.xbold, fontSize: 10.5, letterSpacing: 1 },
+  chipReport: { backgroundColor: C.navy, borderColor: C.navy },
+  chipReportTxt: { fontFamily: F.bold, fontSize: 13, color: '#fff' },
   chips: { paddingHorizontal: 14, paddingTop: 8, paddingBottom: 2, gap: 8 },
   chip: { flexDirection: 'row', alignItems: 'center', gap: 6, maxWidth: 280, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 999,
     backgroundColor: '#fff', borderWidth: 1, borderColor: 'rgba(185,128,54,0.35)' },

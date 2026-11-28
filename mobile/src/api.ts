@@ -109,8 +109,8 @@ export const api = {
   login: (pin: string) => call('login', { pin }),
   /* AI analyst: a plain-English question → a report. The server runs several
      model turns and queries, so it gets a longer wait than other calls. */
-  askAI: (pin: string, question: string, history: { q: string; a: string }[]) =>
-    call('askAI', { pin, payload: { question, history } }, 65000),
+  askAI: (pin: string, question: string, history: { q: string; a: string }[], mode?: 'chat' | 'report') =>
+    call('askAI', { pin, payload: { question, history, mode } }, 65000),
   aiUsage: (pin: string) => call('aiUsage', { pin }),
   aiSetBudget: (pin: string, budget: number) => call('aiSetBudget', { pin, payload: { budget } }),
   aiTestAlert: (pin: string) => call('aiTestAlert', { pin }),

@@ -301,13 +301,40 @@ const TOOLS = [{
   ],
 }];
 
-function systemPrompt(data, me, today) {
+/* Chat answers finish with `reply`; only an explicit report request finishes
+   with `submit_report`. Each mode sees just its own finishing tool. */
+const REPLY_TOOL = {
+  name: 'reply',
+  description: 'Finish: answer the user in the chat. Call exactly once, after any queries.',
+  parameters: {
+    type: 'OBJECT',
+    properties: {
+      text: { type: 'STRING', description: 'The answer, conversational, 1–4 short sentences with the key numbers. Plain text, no markdown headings.' },
+      chart: { type: 'OBJECT', description: 'Optional: one chart, only when a trend or comparison is clearer drawn than told.',
+        properties: { query_id: { type: 'STRING' }, kind: { type: 'STRING', enum: ['bar', 'line'] }, title: { type: 'STRING' } },
+        required: ['query_id', 'kind', 'title'] },
+      records: { type: 'STRING', description: 'Optional: id of a list_records result to show as a small table.' },
+      followups: { type: 'ARRAY', items: { type: 'STRING' }, description: 'Exactly 3 short, specific next questions.' },
+    },
+    required: ['text', 'followups'],
+  },
+};
+const fnsOf = (mode) => [{
+  functionDeclarations: [
+    ...TOOLS[0].functionDeclarations.filter((f) => f.name !== 'submit_report'),
+    mode === 'report' ? TOOLS[0].functionDeclarations.find((f) => f.name === 'submit_report') : REPLY_TOOL,
+  ],
+}];
+/* "generate a report", "make me a report on …", or just "report". */
+const REPORT_RE = /^\s*(report|full report)\s*[.!]?$|\b(generate|create|make|build|prepare|give me|write|download)\b[^.?!]{0,40}\breport\b/i;
+
+function systemPrompt(data, me, today, mode = 'chat') {
   const props = data.props.map((p) => `${p.name}${p.location ? ' (' + p.location + ')' : ''}${p.status && p.status !== 'Active' ? ' [' + p.status + ']' : ''}`).join('; ');
   const channels = [...new Set(data.bookings.map((r) => r.channel).filter(Boolean))].join(', ');
   const cats = [...new Set(data.expenses.map((r) => r.category).filter(Boolean))].join(', ');
   const dates = data.bookings.map((r) => r.booking_date).filter(Boolean).sort();
   const hidden = me.isAdmin ? [] : ['metric.money', 'metric.bookings', 'metric.expenses'].filter((r) => !me.can(r));
-  return `You are the analyst inside a short-term-rental business's operations app. You answer the owner's or staff's questions about their own business data and produce a short report.
+  return `You are the analyst inside a short-term-rental business's operations app. You chat with the owner or staff about their own business data.
 
 Today is ${today}. Currency is Indian Rupees; write amounts like ₹1,25,500 (Indian grouping).
 
@@ -323,9 +350,12 @@ ${hidden.length ? `- This user's role cannot see: ${hidden.join(', ')}. If asked
 Rules:
 - Every number you state must come from a run_query or list_records result in this conversation. Never estimate or invent figures. If the data cannot answer, say what is missing.
 - Be economical: call ALL the queries you need together in your first turn (usually 1–4, in parallel), then call submit_report in the next turn. Avoid extra rounds. For trends use group_by month/week; for comparisons group by property/channel/booking_type. Compare against the previous period when it helps.
+- When comparing periods or items, give the % change and describe its size honestly (a 35% fall is not "slight").
 - Resolve relative dates ("this month", "last quarter", "this year") into from/to dates using today's date.
-- Then call submit_report once. Charts must reference query ids you received. Use line for time trends, bar for comparisons, table for lists. Keep text short and specific — a busy operator reads this on a phone.
-- Follow-up questions must be specific and answerable from this data.`;
+- Follow-up questions must be specific and answerable from this data.
+${mode === 'report'
+  ? `- The user has asked for a REPORT. Build one complete report covering the whole conversation so far (every topic discussed), re-running the queries you need. Then call submit_report once: a title, a summary, 2–4 KPIs, up to 3 charts (line for time trends, bar for comparisons, table for lists — each referencing a query id you received), insights and 3 follow-ups.`
+  : `- This is a chat. Answer like a sharp analyst in a messaging app: direct, 1–4 short sentences, key numbers in the text. Attach one chart only when it really helps (a trend over time or a comparison of 3+ items), or a records table for "which/who" questions. Then call reply once. Do NOT write a report unless asked — the user can ask for one at any time.`}`;
 }
 
 /* Busy (429/5xx) is retried with a short backoff. A question whose FIRST
@@ -372,13 +402,15 @@ export async function askAI(env, me, payload, deps) {
   const question = String(payload.question || '').trim().slice(0, 600);
   if (!question) throw new Error('Type a question first.');
   const t0 = Date.now(), deadline = t0 + DEADLINE_MS;
+  const mode = payload.mode === 'report' || REPORT_RE.test(question) ? 'report' : 'chat';
+  const keep = mode === 'report' ? 10 : 6;
   const data = await loadData(env, deps);
   const today = deps.todayISO();
 
   /* Earlier questions in this thread, so "and for last month?" works. Only the
      question and our own summary go back — never earlier tool data. */
   const contents = [];
-  for (const h of (Array.isArray(payload.history) ? payload.history : []).slice(-4)) {
+  for (const h of (Array.isArray(payload.history) ? payload.history : []).slice(-keep)) {
     if (!h || !h.q) continue;
     contents.push({ role: 'user', parts: [{ text: String(h.q).slice(0, 600) }] });
     contents.push({ role: 'model', parts: [{ text: String(h.a || '').slice(0, 1200) || '(answered)' }] });
@@ -386,8 +418,8 @@ export async function askAI(env, me, payload, deps) {
   contents.push({ role: 'user', parts: [{ text: question }] });
 
   let model = env.GEMINI_MODEL || MODEL_DEFAULT;
-  const hist = (Array.isArray(payload.history) ? payload.history : []).slice(-4);
-  const key = await cacheKey(model, question, hist, data);
+  const hist = (Array.isArray(payload.history) ? payload.history : []).slice(-keep);
+  const key = await cacheKey(model, mode + '|' + question, hist, data);
   const hit = await cachedReport(env, key);
   if (hit) {
     const u = await recordUsage(env, { user: me.username, model, question, ok: 1, cached: 1, key });
@@ -402,11 +434,11 @@ export async function askAI(env, me, payload, deps) {
   for (let turn = 0; turn < MAX_TURNS && !report; turn++) {
     const last = turn === MAX_TURNS - 1;
     const req = {
-      systemInstruction: { parts: [{ text: systemPrompt(data, me, today) }] },
+      systemInstruction: { parts: [{ text: systemPrompt(data, me, today, mode) }] },
       contents,
-      tools: TOOLS,
-      toolConfig: { functionCallingConfig: { mode: 'ANY', ...(last ? { allowedFunctionNames: ['submit_report'] } : {}) } },
-      generationConfig: { maxOutputTokens: 2048, thinkingConfig: { thinkingLevel: 'low' } },
+      tools: fnsOf(mode),
+      toolConfig: { functionCallingConfig: { mode: 'ANY', ...(last ? { allowedFunctionNames: [mode === 'report' ? 'submit_report' : 'reply'] } : {}) } },
+      generationConfig: { maxOutputTokens: mode === 'report' ? 2048 : 1024, thinkingConfig: { thinkingLevel: 'low' } },
     };
     let resp;
     try { resp = await geminiOnce(env, model, req, deadline); }
@@ -426,7 +458,7 @@ export async function askAI(env, me, payload, deps) {
     const calls = parts.filter((p) => p.functionCall);
     if (!calls.length) {
       const txt = parts.map((p) => p.text || '').join('').trim();
-      if (txt) { report = { title: question.slice(0, 60), summary: txt, insights: [], followups: [] }; break; }
+      if (txt) { report = mode === 'report' ? { title: question.slice(0, 60), summary: txt, insights: [], followups: [] } : { text: txt, followups: [] }; break; }
       throw new Error('The AI returned nothing (' + (cand?.finishReason || 'no reason') + '). Try rephrasing.');
     }
     contents.push(cand.content);   // returned as-is: keeps any thought signatures intact
@@ -435,7 +467,7 @@ export async function askAI(env, me, payload, deps) {
       const args = fc.args || {};
       let out;
       try {
-        if (fc.name === 'submit_report') { report = args; out = { ok: true }; }
+        if (fc.name === 'submit_report' || fc.name === 'reply') { report = args; out = { ok: true }; }
         else if (fc.name === 'run_query') {
           const id = 'q' + (++qn), r = runQuery(data, args, me, deps);
           results[id] = { type: 'query', ...r };
@@ -452,7 +484,7 @@ export async function askAI(env, me, payload, deps) {
     }
     if (!report) contents.push({ role: 'user', parts: replies });
   }
-  if (!report) throw new Error('The AI could not finish this report. Try a narrower question.');
+  if (!report) throw new Error('The AI could not finish. Try a narrower question.');
   } catch (e) {
     /* A failed question can still have used tokens — meter it. */
     if (usage.in || usage.out) await recordUsage(env, { user: me.username, model, question, ok: 0, in: usage.in, cachedTok: usage.cached, out: usage.out, cost: costUsd(model, usage) });
@@ -468,7 +500,22 @@ export async function askAI(env, me, payload, deps) {
   }).filter(Boolean);
   const rec = report.records && results[report.records]?.type === 'records' ? results[report.records] : null;
   const str = (v, n) => String(v || '').slice(0, n);
-  const out = {
+  const chartOf = (c) => {
+    const q = c && results[c.query_id];
+    if (!q || q.type !== 'query' || q.rows.length < 2) return null;
+    return { kind: c.kind === 'line' ? 'line' : 'bar', title: str(c.title, 80), unit: q.unit, measure: q.args.measure, group: q.args.group_by, rows: q.rows, total: q.total };
+  };
+  const out = mode === 'chat' ? {
+      kind: 'chat',
+      question,
+      text: str(report.text, 1500),
+      chart: chartOf(report.chart),
+      records: rec ? { kind: rec.kind, rows: rec.rows } : null,
+      followups: followupsFor(report, question).map((s) => str(s, 160)),
+      queries: Object.keys(results).length,
+      ms: Date.now() - t0, model, tokens: usage, at: new Date().toISOString(),
+  } : {
+      kind: 'report',
       question,
       title: str(report.title, 80) || question.slice(0, 60),
       summary: str(report.summary, 1500),
