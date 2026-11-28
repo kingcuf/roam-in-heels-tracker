@@ -15,9 +15,12 @@
    checked against the same metric.* rights that redact the Report tab, so the
    AI cannot show a Viewer a figure their role hides. */
 
-/* Gemini 2.5 Flash is closed to new API keys; 3.8 Flash is Google's current
-   Flash. Override per deployment with the GEMINI_MODEL var. */
-const MODEL_DEFAULT = 'gemini-3.8-flash';
+/* Gemini 3.1 Flash-Lite: tested on real questions (28-Nov-2026) — right figures,
+   ~4 s, ~₹0.2 a question. 2.5 Flash is closed to new keys. Override per
+   deployment with the GEMINI_MODEL var. */
+import { checkBudget, recordUsage, costUsd, cacheKey, cachedReport } from './aibudget.js';
+
+const MODEL_DEFAULT = 'gemini-3.1-flash-lite';
 const MAX_TURNS = 6;
 
 const MEASURES = ['revenue', 'bookings', 'nights', 'avg_booking_value', 'pending', 'guest_paid',
@@ -319,7 +322,7 @@ Business model:
 ${hidden.length ? `- This user's role cannot see: ${hidden.join(', ')}. If asked, say so politely; never estimate those figures.\n` : ''}
 Rules:
 - Every number you state must come from a run_query or list_records result in this conversation. Never estimate or invent figures. If the data cannot answer, say what is missing.
-- Plan, then call the queries you need (usually 1–4; you may call several at once). For trends use group_by month/week; for comparisons group by property/channel/booking_type. Compare against the previous period when it helps.
+- Be economical: call ALL the queries you need together in your first turn (usually 1–4, in parallel), then call submit_report in the next turn. Avoid extra rounds. For trends use group_by month/week; for comparisons group by property/channel/booking_type. Compare against the previous period when it helps.
 - Resolve relative dates ("this month", "last quarter", "this year") into from/to dates using today's date.
 - Then call submit_report once. Charts must reference query ids you received. Use line for time trends, bar for comparisons, table for lists. Keep text short and specific — a busy operator reads this on a phone.
 - Follow-up questions must be specific and answerable from this data.`;
@@ -329,7 +332,7 @@ Rules:
    turn cannot get through moves to the fallback model; once a conversation
    has started it stays on one model, because Gemini's thought signatures are
    only valid on the model that wrote them. */
-const FALLBACK_DEFAULT = 'gemini-3.5-flash';
+const FALLBACK_DEFAULT = 'gemini-3.5-flash-lite';
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 class Busy extends Error {}
 
@@ -383,8 +386,19 @@ export async function askAI(env, me, payload, deps) {
   contents.push({ role: 'user', parts: [{ text: question }] });
 
   let model = env.GEMINI_MODEL || MODEL_DEFAULT;
+  const hist = (Array.isArray(payload.history) ? payload.history : []).slice(-4);
+  const key = await cacheKey(model, question, hist, data);
+  const hit = await cachedReport(env, key);
+  if (hit) {
+    const u = await recordUsage(env, { user: me.username, model, question, ok: 1, cached: 1, key });
+    return { ok: true, report: { ...hit, cached: true, ms: Date.now() - t0, at: new Date().toISOString() }, usage: slim(u) };
+  }
+  await checkBudget(env);
+
   const results = {};   // id -> query or list result
-  let qn = 0, report = null, usage = { in: 0, out: 0 };
+  let qn = 0, report = null;
+  const usage = { in: 0, cached: 0, out: 0 };
+  try {
   for (let turn = 0; turn < MAX_TURNS && !report; turn++) {
     const last = turn === MAX_TURNS - 1;
     const req = {
@@ -392,7 +406,7 @@ export async function askAI(env, me, payload, deps) {
       contents,
       tools: TOOLS,
       toolConfig: { functionCallingConfig: { mode: 'ANY', ...(last ? { allowedFunctionNames: ['submit_report'] } : {}) } },
-      generationConfig: { thinkingConfig: { thinkingLevel: 'low' } },
+      generationConfig: { maxOutputTokens: 2048, thinkingConfig: { thinkingLevel: 'low' } },
     };
     let resp;
     try { resp = await geminiOnce(env, model, req, deadline); }
@@ -403,7 +417,9 @@ export async function askAI(env, me, payload, deps) {
       resp = await geminiOnce(env, model, req, deadline);
     }
     const um = resp.usageMetadata || {};
-    usage.in += um.promptTokenCount || 0;
+    const cachedTok = um.cachedContentTokenCount || 0;
+    usage.in += Math.max(0, (um.promptTokenCount || 0) - cachedTok);
+    usage.cached += cachedTok;
     usage.out += (um.candidatesTokenCount || 0) + (um.thoughtsTokenCount || 0);
     const cand = resp.candidates?.[0];
     const parts = cand?.content?.parts || [];
@@ -420,8 +436,13 @@ export async function askAI(env, me, payload, deps) {
       let out;
       try {
         if (fc.name === 'submit_report') { report = args; out = { ok: true }; }
-        else if (fc.name === 'run_query') { const id = 'q' + (++qn); results[id] = { type: 'query', ...runQuery(data, args, me, deps) }; out = { id, ...results[id] }; }
-        else if (fc.name === 'list_records') { const id = 'r' + (++qn); results[id] = { type: 'records', ...listRecords(data, args, me, deps) }; out = { id, ...results[id] }; }
+        else if (fc.name === 'run_query') {
+          const id = 'q' + (++qn), r = runQuery(data, args, me, deps);
+          results[id] = { type: 'query', ...r };
+          /* Compact for the model: [key, value] pairs, no echo of the args. */
+          out = { id, unit: r.unit, total: r.total, rows: r.rows.map((x) => [x.key, x.value]), ...(r.truncated ? { truncated: true } : {}) };
+        }
+        else if (fc.name === 'list_records') { const id = 'r' + (++qn); results[id] = { type: 'records', ...listRecords(data, args, me, deps) }; out = { id, matched: results[id].matched, rows: results[id].rows }; }
         else out = { error: 'Unknown tool ' + fc.name };
       } catch (e) {
         if (!(e instanceof Refuse)) throw e;
@@ -432,6 +453,11 @@ export async function askAI(env, me, payload, deps) {
     if (!report) contents.push({ role: 'user', parts: replies });
   }
   if (!report) throw new Error('The AI could not finish this report. Try a narrower question.');
+  } catch (e) {
+    /* A failed question can still have used tokens — meter it. */
+    if (usage.in || usage.out) await recordUsage(env, { user: me.username, model, question, ok: 0, in: usage.in, cachedTok: usage.cached, out: usage.out, cost: costUsd(model, usage) });
+    throw e;
+  }
 
   /* Attach OUR rows to every chart; drop charts pointing at nothing. */
   const charts = (Array.isArray(report.charts) ? report.charts : []).slice(0, 3).map((c) => {
@@ -442,9 +468,7 @@ export async function askAI(env, me, payload, deps) {
   }).filter(Boolean);
   const rec = report.records && results[report.records]?.type === 'records' ? results[report.records] : null;
   const str = (v, n) => String(v || '').slice(0, n);
-  return {
-    ok: true,
-    report: {
+  const out = {
       question,
       title: str(report.title, 80) || question.slice(0, 60),
       summary: str(report.summary, 1500),
@@ -458,9 +482,14 @@ export async function askAI(env, me, payload, deps) {
       model,
       tokens: usage,
       at: new Date().toISOString(),
-    },
   };
+  const cost = costUsd(model, usage);
+  const u = await recordUsage(env, { user: me.username, model, question, ok: 1, in: usage.in, cachedTok: usage.cached, out: usage.out, cost, key, report: out });
+  return { ok: true, report: out, usage: slim(u) };
 }
+
+/* What the app needs after each question: the meter, not the history. */
+const slim = (u) => ({ budget: u.budget, spentInr: u.spentInr, pct: u.pct, questions: u.questions });
 
 /* For tests only. */
 export const _internals = { runQuery, listRecords };

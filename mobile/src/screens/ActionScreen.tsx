@@ -259,6 +259,15 @@ export default function ActionScreen() {
     return f;
   };
 
+  /* AI credit: Admins get a banner once the meter passes 70 %. One small read,
+     a few seconds after the screen is up, so it never slows the first paint. */
+  const [ai, setAi] = useState<{ pct: number; spentInr: number; budget: number } | null>(null);
+  useEffect(() => {
+    if (s.me?.role !== 'Admin' || !s.pin) return;
+    const t = setTimeout(() => { api.aiUsage(s.pin).then((r) => setAi(r.usage)).catch(() => {}); }, 3000);
+    return () => clearTimeout(t);
+  }, [s.me?.role, s.pin]);
+
   if (form) {
     return <TaskForm task={form.task} pin={s.pin} onClose={() => setForm(null)} onSaved={(r) => afterWrite(r, 'Saved')} />;
   }
@@ -555,6 +564,11 @@ export default function ActionScreen() {
         {waiting.length ? (
           <Banner title={waiting.length + (waiting.length === 1 ? ' approval needs you' : ' approvals need you')}
             sub={waiting[0].label + (waiting[0].requester ? ' · from ' + waiting[0].requester : '')} onPress={s.openApprovals} />
+        ) : null}
+        {ai && ai.pct >= 70 ? (
+          <Banner title={ai.pct >= 100 ? 'AI credit used up — questions paused' : 'AI credit ' + Math.round(ai.pct) + '% used'}
+            sub={'₹' + Math.round(ai.spentInr) + ' of ₹' + ai.budget + ' · top up in Google AI Studio, then record it in Ask AI'}
+            onPress={() => s.setTab('dash')} soft={ai.pct < 100} />
         ) : null}
         {mine.length ? (
           <Banner title={sentBack ? sentBack + ' request' + (sentBack === 1 ? '' : 's') + ' sent back to you' : mine.length + ' of your requests waiting'}

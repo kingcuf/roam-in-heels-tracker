@@ -20,6 +20,7 @@
 
 import { runMirror } from './mirror.js';
 import { askAI } from './ai.js';
+import { usageSummary, setBudget, testAlert } from './aibudget.js';
 import { hostsData, saveHost, removeHost, saveHostUnit, removeHostUnit, checkHostDeal, writeHostDeal, deleteHostDeal, addHostPayment, removeHostPayment, quickAddHost } from './hosts.js';
 import { photosData, uploadPropertyPhoto, deletePropertyPhoto, deletePropertyPhotos, albumPage, albumImage } from './photos.js';
 import { clientIp, throttleCheck, recordFail, clearFails } from './throttle.js';
@@ -298,6 +299,9 @@ const worker = {
         case 'changePin':      out = await changePin(env, me, payload); break;
         case 'dashboard':      out = redactDashboard(await getDashboard(env, pin, p.property, p.from, p.to, p.basis === 'stay' ? 'stay' : 'booked'), me); break;
         case 'targets':        out = await getTargets(env); break;
+        case 'aiUsage':        { const u = await usageSummary(env); delete u.settings; if (!me.isAdmin) delete u.recent; out = { ok: true, usage: u }; break; }
+        case 'aiSetBudget':    out = await setBudget(env, me, payload); break;
+        case 'aiTestAlert':    out = await testAlert(env, me); break;
         case 'askAI':          out = await askAI(env, me, payload, { readProperties, scopeBookings, pieceDates, todayISO }); break;
         case 'addChecklistItem':    out = await addChecklistItem(env, me, payload); break;
         case 'removeChecklistItem': out = await removeChecklistItem(env, me, payload); break;

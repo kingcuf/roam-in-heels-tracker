@@ -17,10 +17,15 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { C, F, G, groupINR } from './theme';
 import { api } from './api';
 import { useStore } from './store';
-import { Shimmer } from './ui';
+import { Shimmer, useToast } from './ui';
 
 type Row = { key: string; value: number };
 type Chart = { kind: 'bar' | 'line' | 'table'; title: string; unit: string; measure: string; group: string; rows: Row[]; total: number };
+export type Usage = {
+  budget: number; spentInr: number; pct: number; questions: number; cacheHits?: number; avgInr?: number;
+  since?: string; emailOn?: boolean; tokens?: { in: number; cached: number; out: number };
+  recent?: { at: string; user: string; model: string; inr: number; cached: boolean; ok: boolean; q: string }[];
+};
 export type Report = {
   id: string; question: string; title: string; summary: string;
   kpis: { label: string; value: string; note?: string }[];
@@ -290,9 +295,93 @@ function Thinking({ q }: { q: string }) {
   );
 }
 
+/* ── credit meter ── */
+const meterColor = (pct: number) => (pct >= 100 ? C.red : pct >= 70 ? G.gold2 : C.green);
+function Meter({ u, onPress }: { u: Usage; onPress: () => void }) {
+  return (
+    <TouchableOpacity onPress={onPress} style={st.meterChip} accessibilityLabel="AI credit usage">
+      <View style={[st.meterDot, { backgroundColor: meterColor(u.pct) }]} />
+      <Text style={st.meterTxt}>{'Credit ₹' + u.spentInr.toFixed(2) + ' of ₹' + groupINR(u.budget) + ' used'}</Text>
+      <Text style={st.meterChev}>›</Text>
+    </TouchableOpacity>
+  );
+}
+
+function UsageView({ u, admin, onTopUp, onTest }: { u: Usage; admin: boolean; onTopUp: (n: number) => void; onTest: () => void }) {
+  const [amt, setAmt] = useState('');
+  const pct = Math.min(100, u.pct);
+  return (
+    <View style={{ gap: 12 }}>
+      <View style={st.card}>
+        <Text style={st.answerKicker}>AI CREDIT</Text>
+        <Text style={[st.title, { marginTop: 6 }]}>{'₹' + u.spentInr.toFixed(2) + ' of ₹' + groupINR(u.budget)}</Text>
+        <View style={[st.barTrack, { height: 12, marginTop: 12 }]}>
+          <View style={[st.barFill, { height: 12, width: `${Math.max(1, pct)}%` as any, backgroundColor: meterColor(u.pct) }]} />
+          <View style={st.mark70} />
+        </View>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 }}>
+          <Text style={st.meta}>{u.pct.toFixed(1) + '% used'}</Text>
+          <Text style={st.meta}>alert at 70% · stops at 100%</Text>
+        </View>
+        <View style={[st.kpiGrid, { marginTop: 12 }]}>
+          <View style={st.uStat}><Text style={st.kpiLbl}>Questions</Text><Text style={st.uVal}>{u.questions}</Text></View>
+          <View style={st.uStat}><Text style={st.kpiLbl}>Free (cached)</Text><Text style={st.uVal}>{u.cacheHits ?? 0}</Text></View>
+          <View style={st.uStat}><Text style={st.kpiLbl}>Avg / question</Text><Text style={st.uVal}>{'₹' + (u.avgInr ?? 0).toFixed(2)}</Text></View>
+          <View style={st.uStat}><Text style={st.kpiLbl}>Left (≈ questions)</Text><Text style={st.uVal}>{u.avgInr ? groupINR(Math.max(0, (u.budget - u.spentInr) / u.avgInr)) : '—'}</Text></View>
+        </View>
+        <Text style={[st.meta, { textAlign: 'left', marginTop: 10 }]}>
+          {'Since ' + (u.since ? new Date(u.since).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : 'start')
+            + '. The app’s own estimate from token counts, plus 10% margin — Google AI Studio’s billing page is exact. Repeat questions within 24 hours are answered free from the cache.'}
+        </Text>
+      </View>
+      {admin ? (
+        <View style={st.card}>
+          <Text style={st.cardTitle}>Alerts</Text>
+          <Text style={[st.summary, { fontSize: 13.5 }]}>
+            {u.emailOn ? 'Email alert is on: you get one email at 70% and one at 100%. Admins also see a banner on the Action tab.'
+              : 'Admins see a banner on the Action tab at 70%. Email alerts are off — they need a Resend key (see setup).'}
+          </Text>
+          {u.emailOn ? (
+            <TouchableOpacity onPress={onTest} style={[st.follow, { marginTop: 10, justifyContent: 'center' }]}>
+              <Text style={[st.followTxt, { flex: 0, fontFamily: F.bold }]}>Send a test email</Text>
+            </TouchableOpacity>
+          ) : null}
+          <Text style={[st.cardTitle, { marginTop: 16 }]}>Record a top-up</Text>
+          <Text style={[st.summary, { fontSize: 13.5 }]}>After adding credit in Google AI Studio, enter the new balance. The meter restarts from now.</Text>
+          <View style={[st.composer, { marginHorizontal: 0, marginTop: 10 }]}>
+            <TextInput value={amt} onChangeText={(t) => setAmt(t.replace(/[^0-9]/g, ''))} placeholder="New credit, e.g. 500"
+              placeholderTextColor={C.muted} keyboardType="number-pad" style={st.input} />
+            <TouchableOpacity onPress={() => { const n = Number(amt); if (n) { onTopUp(n); setAmt(''); } }} disabled={!Number(amt)}
+              style={[st.send, { width: 'auto' as any, paddingHorizontal: 16 }, !Number(amt) && { opacity: 0.35 }]}>
+              <Text style={[st.sendTxt, { fontSize: 14, marginTop: 0 }]}>Save</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : null}
+      {u.recent && u.recent.length ? (
+        <View style={st.card}>
+          <Text style={[st.cardTitle, { marginBottom: 8 }]}>Recent questions</Text>
+          {u.recent.map((r, i) => (
+            <View key={i} style={[st.tRow, { alignItems: 'center' }, i % 2 === 1 && { backgroundColor: C.warm2 }]}>
+              <View style={{ flex: 1, paddingRight: 8 }}>
+                <Text style={st.tKey} numberOfLines={1}>{r.q}</Text>
+                <Text style={st.meta2}>{(r.user || 'owner') + ' · ' + new Date(r.at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) + (r.ok ? '' : ' · failed')}</Text>
+              </View>
+              <Text style={[st.tVal, r.cached && { color: C.green }]}>{r.cached ? 'free' : '₹' + r.inr.toFixed(2)}</Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 /* ── the screen ── */
 export function AIAnalyst({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const s = useStore();
+  const toast = useToast();
+  const admin = s.me?.role === 'Admin' || !s.me?.username;
+  const [usage, setUsage] = useState<Usage | null>(null);
   const [reports, setReports] = useState<Report[]>(() => load());
   const [active, setActive] = useState<string>('new');
   const [text, setText] = useState('');
@@ -302,6 +391,15 @@ export function AIAnalyst({ visible, onClose }: { visible: boolean; onClose: () 
   const tabsRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
 
   useEffect(() => { save(reports); }, [reports]);
+  const loadUsage = () => api.aiUsage(s.pin).then((r) => setUsage(r.usage)).catch(() => {});
+  useEffect(() => { if (visible) loadUsage(); }, [visible]);
+  const topUp = async (n: number) => {
+    try { const r = await api.aiSetBudget(s.pin, n); setUsage(r.usage); toast(r.message); }
+    catch (e: any) { toast(e?.message || 'Could not save', false); }
+  };
+  const testMail = async () => {
+    try { const r = await api.aiTestAlert(s.pin); toast(r.message); } catch (e: any) { toast(e?.message || 'Could not send', false); }
+  };
   const cur = useMemo(() => reports.find((r) => r.id === active) || null, [reports, active]);
 
   const ask = async (qRaw: string, history?: Report['history']) => {
@@ -316,6 +414,8 @@ export function AIAnalyst({ visible, onClose }: { visible: boolean; onClose: () 
       const r = await api.askAI(s.pin, q, hist);
       const rep: Report = { ...r.report, id: String(Date.now()), history: hist };
       setReports((all) => [rep, ...all].slice(0, MAX_KEEP));
+      if (r.usage) setUsage((u) => ({ ...(u || {}), ...r.usage }));
+      if (r.usage && r.usage.pct >= 70) loadUsage();
       setActive(rep.id);
       setTimeout(() => tabsRef.current?.scrollTo({ x: 0, animated: true }), 30);
     } catch (e: any) {
@@ -348,7 +448,8 @@ export function AIAnalyst({ visible, onClose }: { visible: boolean; onClose: () 
               <View style={st.hIcon}><Sparkle size={20} color="#fff" /></View>
               <View style={{ flex: 1 }}>
                 <Text style={st.hTitle}>AI Analyst</Text>
-                <Text style={st.hSub}>Ask about bookings, revenue, guests & costs</Text>
+                {usage ? <Meter u={usage} onPress={() => { setActive('usage'); loadUsage(); }} />
+                  : <Text style={st.hSub}>Ask about bookings, revenue, guests & costs</Text>}
               </View>
               <TouchableOpacity onPress={onClose} style={st.close} accessibilityLabel="Close AI Analyst">
                 <Text style={st.closeX}>✕</Text>
@@ -375,7 +476,8 @@ export function AIAnalyst({ visible, onClose }: { visible: boolean; onClose: () 
 
             {/* body */}
             <ScrollView ref={scroll} style={{ flex: 1 }} contentContainerStyle={st.body} keyboardShouldPersistTaps="handled">
-              {active === 'pending' && pending ? <Thinking q={pending.q} />
+              {active === 'usage' && usage ? <UsageView u={usage} admin={admin} onTopUp={topUp} onTest={testMail} />
+                : active === 'pending' && pending ? <Thinking q={pending.q} />
                 : active === 'error' && err ? (
                   <View style={{ gap: 12 }}>
                     <View style={st.qBubble}><Text style={st.qTxt}>{err.q}</Text></View>
@@ -510,5 +612,13 @@ const st = StyleSheet.create({
   input: { flex: 1, minHeight: 40, maxHeight: 110, height: 40, fontFamily: F.med, fontSize: 15, color: C.ink, paddingTop: 10, paddingBottom: 10, outlineStyle: 'none' as any },
   send: { width: 40, height: 40, borderRadius: 20, backgroundColor: C.navy, alignItems: 'center', justifyContent: 'center' },
   sendTxt: { color: '#fff', fontSize: 19, fontFamily: F.xbold, marginTop: -2 },
+  meterChip: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', marginTop: 3, paddingVertical: 3, paddingHorizontal: 9, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.75)', borderWidth: 1, borderColor: C.line },
+  meterDot: { width: 7, height: 7, borderRadius: 4 },
+  meterTxt: { fontFamily: F.semi, fontSize: 11.5, color: C.bark },
+  meterChev: { fontFamily: F.bold, fontSize: 12, color: C.muted },
+  mark70: { position: 'absolute', left: '70%', top: -3, bottom: -3, width: 2, backgroundColor: C.ink, opacity: 0.25 },
+  uStat: { flexGrow: 1, flexBasis: '45%', backgroundColor: C.warm2, borderRadius: 14, padding: 12 },
+  uVal: { fontFamily: F.xbold, fontSize: 18, color: C.ink, marginTop: 2 },
+  meta2: { fontFamily: F.med, fontSize: 11, color: C.muted, marginTop: 2 },
   thread: { fontFamily: F.med, fontSize: 10.5, color: C.muted, textAlign: 'center', marginBottom: 6 },
 });

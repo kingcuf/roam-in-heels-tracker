@@ -65,7 +65,9 @@ export const ACTION_RIGHTS = {
   targets: 'reports.view', setTarget: 'reports.view',
   /* The AI analyst reads the same data as the Report; each figure is further
      checked against the metric.* rights inside ai.js. */
-  askAI: 'reports.view',
+  askAI: 'reports.view', aiUsage: 'reports.view',
+  /* Admin-only, checked in aibudget.js. */
+  aiSetBudget: 'reports.view', aiTestAlert: 'reports.view',
   /* Ticking is the manager's job. Adding/removing steps is checked per scope
      inside the handlers (property steps: Admin; one-off steps: booking rights). */
   tickChecklist: 'action.manage',

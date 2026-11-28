@@ -111,6 +111,9 @@ export const api = {
      model turns and queries, so it gets a longer wait than other calls. */
   askAI: (pin: string, question: string, history: { q: string; a: string }[]) =>
     call('askAI', { pin, payload: { question, history } }, 65000),
+  aiUsage: (pin: string) => call('aiUsage', { pin }),
+  aiSetBudget: (pin: string, budget: number) => call('aiSetBudget', { pin, payload: { budget } }),
+  aiTestAlert: (pin: string) => call('aiTestAlert', { pin }),
   /* basis: where a booking's money lands — 'booked' (Booking Date) or 'stay'
      (spread over the nights stayed). Expenses are the same on both. */
   getDashboard: (pin: string, property: string, from: string, to: string, basis: 'booked' | 'stay' = 'booked') =>
