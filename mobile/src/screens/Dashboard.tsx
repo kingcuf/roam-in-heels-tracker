@@ -16,6 +16,7 @@ import { SelectField, DateField } from '../fields';
 import { Shimmer, ShimmerCard } from '../ui';
 import { BankChart } from '../charts';
 import RevenueTarget from './RevenueTarget';
+import { AIAnalyst, AIFab } from '../AIAnalyst';
 
 type Drill =
   | { kind: 'metric'; metric: string }
@@ -27,6 +28,7 @@ export default function Dashboard() {
   const toast = useToast();
   const d = s.dash;
   const [drill, setDrill] = useState<Drill>(null);
+  const [aiOpen, setAiOpen] = useState(false);
   const scrollRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
 
   // T5: re-tapping the active Dashboard tab scrolls back to the top
@@ -389,6 +391,8 @@ export default function Dashboard() {
       </ScrollView>
 
       <DrillSheet drill={drill} onClose={() => setDrill(null)} cash={cash} sav={sav} pb={pb} />
+      <AIFab onPress={() => setAiOpen(true)} />
+      <AIAnalyst visible={aiOpen} onClose={() => setAiOpen(false)} />
     </View>
   );
 }

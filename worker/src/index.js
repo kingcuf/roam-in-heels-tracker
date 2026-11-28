@@ -19,6 +19,7 @@
  */
 
 import { runMirror } from './mirror.js';
+import { askAI } from './ai.js';
 import { hostsData, saveHost, removeHost, saveHostUnit, removeHostUnit, checkHostDeal, writeHostDeal, deleteHostDeal, addHostPayment, removeHostPayment, quickAddHost } from './hosts.js';
 import { photosData, uploadPropertyPhoto, deletePropertyPhoto, deletePropertyPhotos, albumPage, albumImage } from './photos.js';
 import { clientIp, throttleCheck, recordFail, clearFails } from './throttle.js';
@@ -297,6 +298,7 @@ const worker = {
         case 'changePin':      out = await changePin(env, me, payload); break;
         case 'dashboard':      out = redactDashboard(await getDashboard(env, pin, p.property, p.from, p.to, p.basis === 'stay' ? 'stay' : 'booked'), me); break;
         case 'targets':        out = await getTargets(env); break;
+        case 'askAI':          out = await askAI(env, me, payload, { readProperties, scopeBookings, pieceDates, todayISO }); break;
         case 'addChecklistItem':    out = await addChecklistItem(env, me, payload); break;
         case 'removeChecklistItem': out = await removeChecklistItem(env, me, payload); break;
         case 'tickChecklist':       out = await tickChecklist(env, me, row, payload); break;
@@ -359,6 +361,8 @@ const worker = {
   }
 };
 export default worker;
+/* For tests (worker/src/ai.js is checked against the Report's own rules). */
+export { scopeBookings, pieceDates, readProperties };
 
 function corsHeaders() {
   return {

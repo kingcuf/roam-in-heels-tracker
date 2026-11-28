@@ -35,7 +35,7 @@ type Args = {
   ticket?: number;
 };
 
-async function call(action: string, a: Args): Promise<any> {
+async function call(action: string, a: Args, timeoutMs = 25000): Promise<any> {
   let u =
     API_URL +
     '?action=' + encodeURIComponent(action) +
@@ -58,7 +58,7 @@ async function call(action: string, a: Args): Promise<any> {
   if (a.ticket) u += '&ticket=' + encodeURIComponent(String(a.ticket));
 
   const ctl = new AbortController();
-  const t = setTimeout(() => ctl.abort(), 25000);
+  const t = setTimeout(() => ctl.abort(), timeoutMs);
   try {
     const res = await fetch(u, { signal: ctl.signal });
     const txt = await res.text();
@@ -107,6 +107,10 @@ function postForm(url: string, fd: FormData, timeoutMs: number): Promise<any> {
 
 export const api = {
   login: (pin: string) => call('login', { pin }),
+  /* AI analyst: a plain-English question → a report. The server runs several
+     model turns and queries, so it gets a longer wait than other calls. */
+  askAI: (pin: string, question: string, history: { q: string; a: string }[]) =>
+    call('askAI', { pin, payload: { question, history } }, 65000),
   /* basis: where a booking's money lands — 'booked' (Booking Date) or 'stay'
      (spread over the nights stayed). Expenses are the same on both. */
   getDashboard: (pin: string, property: string, from: string, to: string, basis: 'booked' | 'stay' = 'booked') =>
