@@ -9,7 +9,7 @@
    browser only. */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text,
+  ActivityIndicator, KeyboardAvoidingView, useWindowDimensions, Modal, Platform, Pressable, ScrollView, StyleSheet, Text,
   TextInput, TouchableOpacity, View,
 } from 'react-native';
 import Svg, { Circle, Line, Path, Polyline, Rect, Text as SvgText, Defs, LinearGradient as SvgGrad, Stop } from 'react-native-svg';
@@ -40,13 +40,13 @@ const MAX_KEEP = 20;
 const load = (): Report[] => { try { return JSON.parse(globalThis.localStorage?.getItem(KEY) || '[]'); } catch { return []; } };
 const save = (r: Report[]) => { try { globalThis.localStorage?.setItem(KEY, JSON.stringify(r.slice(0, MAX_KEEP))); } catch {} };
 
+/* Few and useful: the first two are what an operator asks most, and are the
+   only ones shown on a phone. */
 const STARTERS = [
-  'How is revenue trending month by month?',
-  'Which channel brings the most money, and how has that changed?',
-  'Which guests still owe us money?',
-  'Compare my properties on revenue and nights booked this month',
-  'Which weekdays get the most bookings?',
-  'What are my biggest expenses and how is profit trending?',
+  'How is this month going compared to last month?',
+  'Who still owes us money?',
+  'Which property earned more this month?',
+  'Which booking channel brings the most revenue?',
 ];
 
 /* ── formatting ── */
@@ -69,11 +69,9 @@ function fmt(v: number, unit: string, short = false) {
 /* ── the floating button ── */
 export function AIFab({ onPress }: { onPress: () => void }) {
   return (
-    <TouchableOpacity onPress={onPress} activeOpacity={0.85} style={st.fabWrap} accessibilityLabel="Ask AI">
-      <View style={st.fab}>
-        <Sparkle size={18} color="#fff" />
-        <Text style={st.fabTxt}>Ask AI</Text>
-      </View>
+    <TouchableOpacity onPress={onPress} activeOpacity={0.85} style={st.fab} accessibilityLabel="Ask AI">
+      <Sparkle size={17} color={G.gold1} />
+      <Text style={st.fabTxt}>Ask AI</Text>
     </TouchableOpacity>
   );
 }
@@ -380,6 +378,8 @@ function UsageView({ u, admin, onTopUp, onTest }: { u: Usage; admin: boolean; on
 export function AIAnalyst({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const s = useStore();
   const toast = useToast();
+  const { width } = useWindowDimensions();
+  const starters = STARTERS.slice(0, width < 600 ? 2 : 4);
   const admin = s.me?.role === 'Admin' || !s.me?.username;
   const [usage, setUsage] = useState<Usage | null>(null);
   const [reports, setReports] = useState<Report[]>(() => load());
@@ -444,7 +444,7 @@ export function AIAnalyst({ visible, onClose }: { visible: boolean; onClose: () 
         <SafeAreaView style={{ flex: 1 }} edges={['top', 'bottom']}>
           <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
             {/* header */}
-            <View style={st.header}>
+            <View style={[st.header, st.col]}>
               <View style={st.hIcon}><Sparkle size={20} color="#fff" /></View>
               <View style={{ flex: 1 }}>
                 <Text style={st.hTitle}>AI Analyst</Text>
@@ -457,7 +457,8 @@ export function AIAnalyst({ visible, onClose }: { visible: boolean; onClose: () 
             </View>
 
             {/* report tabs */}
-            <ScrollView ref={tabsRef} horizontal showsHorizontalScrollIndicator={false} style={st.tabsBar} contentContainerStyle={st.tabs}>
+            <View style={st.tabsBar}><View style={st.col}>
+            <ScrollView ref={tabsRef} horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={st.tabs}>
               <TouchableOpacity onPress={() => setActive('new')} style={[st.tab, st.tabNew, active === 'new' && st.tabOn]}>
                 <Text style={[st.tabTxt, active === 'new' && st.tabTxtOn]}>＋ New</Text>
               </TouchableOpacity>
@@ -473,9 +474,10 @@ export function AIAnalyst({ visible, onClose }: { visible: boolean; onClose: () 
                 </Pressable>
               ))}
             </ScrollView>
+            </View></View>
 
             {/* body */}
-            <ScrollView ref={scroll} style={{ flex: 1 }} contentContainerStyle={st.body} keyboardShouldPersistTaps="handled">
+            <ScrollView ref={scroll} style={{ flex: 1 }} contentContainerStyle={[st.body, st.col]} keyboardShouldPersistTaps="handled">
               {active === 'usage' && usage ? <UsageView u={usage} admin={admin} onTopUp={topUp} onTest={testMail} />
                 : active === 'pending' && pending ? <Thinking q={pending.q} />
                 : active === 'error' && err ? (
@@ -493,12 +495,12 @@ export function AIAnalyst({ visible, onClose }: { visible: boolean; onClose: () 
                 : (
                   <View style={{ gap: 14 }}>
                     <View style={st.hero}>
-                      <Sparkle size={30} />
-                      <Text style={st.heroT}>What do you want to know?</Text>
-                      <Text style={st.heroS}>Ask in plain English. You’ll get a report with the answer, charts, trends and what to ask next — built from your own data.</Text>
+                      <View style={st.heroIcon}><Sparkle size={26} /></View>
+                      <Text style={st.heroT}>Ask about your business</Text>
+                      <Text style={st.heroS}>Plain English in, a short report out — answer, charts and what to ask next.</Text>
                     </View>
-                    <Text style={st.sectionLbl}>Try one of these</Text>
-                    {STARTERS.map((q) => (
+                    <Text style={st.sectionLbl}>Try asking</Text>
+                    {starters.map((q) => (
                       <TouchableOpacity key={q} onPress={() => ask(q, [])} style={st.follow} disabled={!!pending} activeOpacity={0.7}>
                         <Text style={st.followTxt}>{q}</Text>
                         <Text style={st.followArrow}>↗</Text>
@@ -508,6 +510,19 @@ export function AIAnalyst({ visible, onClose }: { visible: boolean; onClose: () 
                 )}
             </ScrollView>
 
+            {/* Follow-ups ride above the composer after every answer, so the
+                next question is always one tap away without scrolling. */}
+            <View style={st.col}>
+            {cur && !pending && cur.followups.length ? (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={st.chips} keyboardShouldPersistTaps="handled">
+                {cur.followups.map((q, i) => (
+                  <TouchableOpacity key={i} onPress={() => ask(q)} style={st.chip} activeOpacity={0.75}>
+                    <Sparkle size={12} />
+                    <Text style={st.chipTxt} numberOfLines={1}>{q}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            ) : null}
             {/* composer */}
             <View style={st.composer}>
               <TextInput
@@ -521,7 +536,7 @@ export function AIAnalyst({ visible, onClose }: { visible: boolean; onClose: () 
                 {pending ? <ActivityIndicator color="#fff" size="small" /> : <Text style={st.sendTxt}>↑</Text>}
               </TouchableOpacity>
             </View>
-            {cur && !pending ? <Text style={st.thread}>Follow-ups continue this report’s conversation · tap ＋ New to start fresh</Text> : null}
+            </View>
           </KeyboardAvoidingView>
         </SafeAreaView>
       </View>
@@ -530,13 +545,14 @@ export function AIAnalyst({ visible, onClose }: { visible: boolean; onClose: () 
 }
 
 const st = StyleSheet.create({
-  fabWrap: { position: 'absolute', right: 16, bottom: 112, zIndex: 20 },
+  /* Same spot, height and shape as the Action tab's "+ To-do" button, so the
+     two floating actions line up across tabs. */
   fab: {
-    flexDirection: 'row', alignItems: 'center', gap: 7, backgroundColor: C.navy, paddingVertical: 13, paddingHorizontal: 18,
-    borderRadius: 999, shadowColor: G.shadow, shadowOpacity: 0.35, shadowRadius: 16, shadowOffset: { width: 0, height: 8 }, elevation: 8,
-    borderWidth: 1, borderColor: 'rgba(233,185,110,0.6)',
+    position: 'absolute', right: 16, bottom: 18, height: 46, paddingHorizontal: 18, borderRadius: 23, backgroundColor: C.navy,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, zIndex: 20,
+    shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 6,
   },
-  fabTxt: { color: '#fff', fontFamily: F.xbold, fontSize: 14, letterSpacing: 0.2 },
+  fabTxt: { color: '#fff', fontSize: 14, fontFamily: F.bold },
 
   screen: { flex: 1, backgroundColor: G.bgMid },
   header: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 8 },
@@ -556,7 +572,8 @@ const st = StyleSheet.create({
   tabX: { color: 'rgba(255,255,255,0.7)', fontSize: 11, marginLeft: 8, fontFamily: F.bold },
 
   body: { padding: 16, paddingBottom: 30 },
-  hero: { alignItems: 'center', paddingVertical: 22, paddingHorizontal: 12, gap: 8 },
+  hero: { alignItems: 'center', paddingTop: 36, paddingBottom: 18, paddingHorizontal: 12, gap: 8 },
+  heroIcon: { width: 56, height: 56, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.85)', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: G.glassEdge, marginBottom: 4 },
   heroT: { fontFamily: F.xbold, fontSize: 22, color: C.ink, textAlign: 'center' },
   heroS: { fontFamily: F.med, fontSize: 13.5, color: C.bark, textAlign: 'center', lineHeight: 20 },
   sectionLbl: { fontFamily: F.bold, fontSize: 12, color: C.bark, letterSpacing: 0.6, textTransform: 'uppercase', marginTop: 4 },
@@ -607,7 +624,7 @@ const st = StyleSheet.create({
 
   meta: { fontFamily: F.med, fontSize: 11, color: C.muted, textAlign: 'center', marginTop: 4, lineHeight: 16 },
 
-  composer: { flexDirection: 'row', alignItems: 'flex-end', gap: 10, marginHorizontal: 14, marginTop: 6, marginBottom: 4, padding: 6, paddingLeft: 16,
+  composer: { flexDirection: 'row', alignItems: 'flex-end', gap: 10, marginHorizontal: 14, marginTop: 8, marginBottom: 10, padding: 6, paddingLeft: 16,
     backgroundColor: '#fff', borderRadius: 26, borderWidth: 1, borderColor: C.line, shadowColor: G.shadow, shadowOpacity: 0.08, shadowRadius: 14, shadowOffset: { width: 0, height: 4 } },
   input: { flex: 1, minHeight: 40, maxHeight: 110, height: 40, fontFamily: F.med, fontSize: 15, color: C.ink, paddingTop: 10, paddingBottom: 10, outlineStyle: 'none' as any },
   send: { width: 40, height: 40, borderRadius: 20, backgroundColor: C.navy, alignItems: 'center', justifyContent: 'center' },
@@ -620,5 +637,11 @@ const st = StyleSheet.create({
   uStat: { flexGrow: 1, flexBasis: '45%', backgroundColor: C.warm2, borderRadius: 14, padding: 12 },
   uVal: { fontFamily: F.xbold, fontSize: 18, color: C.ink, marginTop: 2 },
   meta2: { fontFamily: F.med, fontSize: 11, color: C.muted, marginTop: 2 },
+  /* On a wide screen the analyst reads as a centred column, like a chat app. */
+  col: { width: '100%', maxWidth: 780, alignSelf: 'center' },
+  chips: { paddingHorizontal: 14, paddingTop: 8, paddingBottom: 2, gap: 8 },
+  chip: { flexDirection: 'row', alignItems: 'center', gap: 6, maxWidth: 280, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 999,
+    backgroundColor: '#fff', borderWidth: 1, borderColor: 'rgba(185,128,54,0.35)' },
+  chipTxt: { fontFamily: F.semi, fontSize: 13, color: C.ink, flexShrink: 1 },
   thread: { fontFamily: F.med, fontSize: 10.5, color: C.muted, textAlign: 'center', marginBottom: 6 },
 });

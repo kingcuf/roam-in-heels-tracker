@@ -128,7 +128,7 @@ export default function Dashboard() {
 
   return (
     <View style={{ flex: 1 }}>
-      <ScrollView ref={scrollRef} contentContainerStyle={{ padding: 14, paddingBottom: 40 }}>
+      <ScrollView ref={scrollRef} contentContainerStyle={{ padding: 14, paddingBottom: 84 }}>
         {/* hero — bank balance over the heels art */}
         {canCash && <Rise i={0}>
           <Glass radius={30} strong style={{ marginBottom: 14 }}>

@@ -476,7 +476,7 @@ export async function askAI(env, me, payload, deps) {
       charts,
       records: rec ? { kind: rec.kind, rows: rec.rows } : null,
       insights: (Array.isArray(report.insights) ? report.insights : []).slice(0, 5).map((s) => str(s, 300)),
-      followups: (Array.isArray(report.followups) ? report.followups : []).slice(0, 3).map((s) => str(s, 160)),
+      followups: followupsFor(report, question).map((s) => str(s, 160)),
       queries: Object.keys(results).length,
       ms: Date.now() - t0,
       model,
@@ -486,6 +486,17 @@ export async function askAI(env, me, payload, deps) {
   const cost = costUsd(model, usage);
   const u = await recordUsage(env, { user: me.username, model, question, ok: 1, in: usage.in, cachedTok: usage.cached, out: usage.out, cost, key, report: out });
   return { ok: true, report: out, usage: slim(u) };
+}
+
+/* Every answer ends with three next questions. The model is asked for them;
+   if it gives fewer, generic ones that always work on this data fill in. */
+function followupsFor(report, question) {
+  const seen = new Set([question.toLowerCase()]);
+  const out = [];
+  const add = (q) => { const t = String(q || '').trim(); if (t && !seen.has(t.toLowerCase()) && out.length < 3) { seen.add(t.toLowerCase()); out.push(t); } };
+  (Array.isArray(report.followups) ? report.followups : []).forEach(add);
+  ['How does this compare with last month?', 'Break this down by property', 'Show the trend over the last 6 months'].forEach(add);
+  return out;
 }
 
 /* What the app needs after each question: the meter, not the history. */
